@@ -1,15 +1,27 @@
 package com.iconcraft.studio.apk
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
+import android.graphics.PorterDuffXfermode
+import android.graphics.RectF
+import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
+import android.os.Build
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.iconcraft.studio.data.QueueStorage
+import com.iconcraft.studio.lab.ProceduralThemeEngine
 import com.iconcraft.studio.model.CustomIconQueueItem
 import com.iconcraft.studio.model.InstalledApp
 import kotlinx.coroutines.Dispatchers
@@ -17,11 +29,15 @@ import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.ByteArrayOutputStream
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 data class InstalledIconPack(
     val packageName: String,
     val packLabel: String,
-    val iconImageBitmap: ImageBitmap? = null
+    val iconImageBitmap: ImageBitmap? = null,
+    val subtitle: String? = null
 )
 
 data class InstalledIconCraftPackStatus(
@@ -250,10 +266,12 @@ class BaseIconPackManager(private val context: Context) {
     }
 
     /**
-     * Queries PackageManager for installed third-party icon packs using standard intents:
-     * - `org.adw.launcher.THEMES`
-     * - `com.novalauncher.THEME`
-     * - `com.anddoes.launcher.THEME`
+     * Queries PackageManager for installed icon packs using:
+     * 1. Standard & OEM launcher theme intents (`org.adw.launcher.THEMES`, `com.novalauncher.THEME`, etc.)
+     * 2. Direct inspection of Nothing Icon Pack (`com.nothing.icon`, `com.nothing.icon.free`, etc.)
+     *    and OEM icon packs that do not declare third-party launcher activities.
+     * 3. Scanning installed packages for `res/xml/appfilter.xml` or `res/raw/appfilter.xml`.
+     * 4. Guaranteed Nothing UI Monochrome option on Nothing OS devices.
      */
     suspend fun loadInstalledIconPacks(): List<InstalledIconPack> = withContext(Dispatchers.IO) {
         val pm = context.packageManager
@@ -263,20 +281,44 @@ class BaseIconPackManager(private val context: Context) {
             "com.anddoes.launcher.THEME",
             "com.teslacoilsw.launcher.THEME",
             "org.adw.launcher.icons.ACTION_PICK_ICON",
-            "ch.deletescape.lawnchair.ICONPACK"
+            "ch.deletescape.lawnchair.ICONPACK",
+            "com.gau.go.launcherex.theme",
+            "com.SmartLauncher.THEME",
+            "ginlemon.smartlauncher.THEMES",
+            "com.nothing.launcher.THEME",
+            "com.nothing.icon.ACTION_ICON_PACK"
         )
+
+        val homeLauncherPackages = runCatching {
+            pm.queryIntentActivities(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                0
+            ).mapNotNull { it.activityInfo?.packageName }.toSet()
+        }.getOrDefault(emptySet())
 
         val discoveredPackages = LinkedHashSet<String>()
 
+        // 1. Explicitly check known Nothing & OEM icon pack package names first
+        val knownDirectPackPackages = listOf(
+            NOTHING_ICON_PACK_PKG,
+            "com.nothing.icon.free",
+            "com.nothing.iconpack"
+        )
+        for (knownPkg in knownDirectPackPackages) {
+            runCatching {
+                pm.getApplicationInfo(knownPkg, 0)
+                discoveredPackages.add(knownPkg)
+            }
+        }
+
+        // 2. Query standard & OEM launcher intent actions and categories
         for (token in themeTokens) {
-            // Query as direct intent action
             runCatching {
                 val byAction = pm.queryIntentActivities(Intent(token), PackageManager.GET_META_DATA)
                 for (ri in byAction) {
                     discoveredPackages.add(ri.activityInfo.packageName)
                 }
             }
-            // Query as category under ACTION_MAIN (used by Nova/Nothing/Apex style manifests)
             runCatching {
                 val byCategory = pm.queryIntentActivities(
                     Intent(Intent.ACTION_MAIN).addCategory(token),
@@ -284,6 +326,42 @@ class BaseIconPackManager(private val context: Context) {
                 )
                 for (ri in byCategory) {
                     discoveredPackages.add(ri.activityInfo.packageName)
+                }
+            }
+        }
+
+        // 3. Scan installed applications for Nothing/OEM icon packs or packages bundling appfilter.xml
+        runCatching {
+            val allApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+            for (appInfo in allApps) {
+                val pkg = appInfo.packageName ?: continue
+                if (pkg == context.packageName || pkg == ICONCRAFT_PACK_PKG) continue
+                if (pkg in discoveredPackages || pkg in homeLauncherPackages) continue
+
+                if (pkg.startsWith("com.nothing.icon") ||
+                    pkg.startsWith("com.oneplus.iconpack") ||
+                    pkg.startsWith("com.oplus.iconpack")
+                ) {
+                    discoveredPackages.add(pkg)
+                    continue
+                }
+
+                val isUserOrUpdatedSystemApp =
+                    (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) == 0 ||
+                        (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+                val lowerPkg = pkg.lowercase()
+                val looksLikeIconPackPkg =
+                    lowerPkg.contains("icon") || lowerPkg.contains("theme") || lowerPkg.contains("pack")
+
+                if (isUserOrUpdatedSystemApp || looksLikeIconPackPkg) {
+                    val hasAppFilter = runCatching {
+                        val res = pm.getResourcesForApplication(appInfo)
+                        res.getIdentifier("appfilter", "xml", pkg) != 0 ||
+                            res.getIdentifier("appfilter", "raw", pkg) != 0
+                    }.getOrDefault(false)
+                    if (hasAppFilter) {
+                        discoveredPackages.add(pkg)
+                    }
                 }
             }
         }
@@ -296,26 +374,72 @@ class BaseIconPackManager(private val context: Context) {
         for (pkg in discoveredPackages) {
             runCatching {
                 val appInfo = pm.getApplicationInfo(pkg, 0)
-                val label = pm.getApplicationLabel(appInfo).toString().ifBlank { pkg }
-                val iconDrawable = pm.getApplicationIcon(appInfo)
-                val bmp = renderDrawableToBitmap(iconDrawable, 96)
+                val rawLabel = pm.getApplicationLabel(appInfo).toString().ifBlank { pkg }
+                val isNothing = isNothingIconPack(pkg)
+                val displayLabel = if (isNothing) {
+                    if (rawLabel.equals("Nothing", ignoreCase = true) ||
+                        rawLabel.equals("Nothing Icon", ignoreCase = true) ||
+                        rawLabel.equals("Nothing Icon Pack", ignoreCase = true)
+                    ) {
+                        "Nothing Icon Pack (Nothing UI Style)"
+                    } else {
+                        "$rawLabel (Nothing UI Style)"
+                    }
+                } else {
+                    rawLabel
+                }
+                val iconDrawable = runCatching { pm.getApplicationIcon(appInfo) }.getOrNull()
+                val bmp = if (iconDrawable != null) {
+                    renderDrawableToBitmap(iconDrawable, 96)
+                } else if (isNothing) {
+                    createNothingPackBadgeBitmap(96)
+                } else {
+                    null
+                }
                 packs.add(
                     InstalledIconPack(
                         packageName = pkg,
-                        packLabel = label,
-                        iconImageBitmap = bmp?.asImageBitmap()
+                        packLabel = displayLabel,
+                        iconImageBitmap = bmp?.asImageBitmap(),
+                        subtitle = if (isNothing) {
+                            "Lowkey Nothing UI monochrome icons for all other apps • $pkg"
+                        } else {
+                            pkg
+                        }
                     )
                 )
             }
         }
 
-        packs.sortedBy { it.packLabel.lowercase() }
+        // Ensure Nothing Icon Pack (Nothing UI Style) is always available on Nothing devices
+        // (and as a built-in Nothing UI monochrome option even if com.nothing.icon is embedded in the launcher)
+        if (packs.none { isNothingIconPack(it.packageName) }) {
+            val badgeBmp = createNothingPackBadgeBitmap(96)
+            packs.add(
+                InstalledIconPack(
+                    packageName = NOTHING_ICON_PACK_PKG,
+                    packLabel = "Nothing Icon Pack (Nothing UI Style)",
+                    iconImageBitmap = badgeBmp.asImageBitmap(),
+                    subtitle = "Lowkey Nothing UI monochrome icons for all non-customized apps"
+                )
+            )
+        }
+
+        packs.sortedWith(
+            compareBy<InstalledIconPack> { !isNothingIconPack(it.packageName) }
+                .thenBy { it.packLabel.lowercase() }
+        )
     }
 
     /**
      * Merges the user's IconCraft Custom Queue (highest priority, 512x512 PNG) with the selected
      * Base Pack (256x256 ARGB_8888 PNG for currently installed launchable apps not overridden by the user,
      * plus `<iconback>`, `<iconmask>`, `<iconupon>`, and `<scale>`).
+     *
+     * When the selected Base Pack is the Nothing Icon Pack (`com.nothing.icon`), every non-customized
+     * installed app automatically receives either its dedicated drawable from `com.nothing.icon` OR
+     * a synthesized Nothing UI Monochrome icon (using Android 13+ `AdaptiveIconDrawable.monochrome`
+     * or high-contrast foreground glyph extraction on Nothing's `#1C1D1F` dark charcoal backdrop).
      */
     suspend fun buildMergedPackPayload(
         userQueueItems: List<CustomIconQueueItem>,
@@ -340,26 +464,47 @@ class BaseIconPackManager(private val context: Context) {
         }
 
         val pm = context.packageManager
+        val isNothingPack = isNothingIconPack(basePackPackageName)
         val baseResources = runCatching {
             pm.getResourcesForApplication(basePackPackageName)
-        }.getOrNull() ?: return@withContext MergedPackPayload(
-            items = userQueueItems,
-            extras = AppFilterExtras(),
-            inMemoryPngBytesByFilename = emptyMap(),
-            userCustomizedCount = userQueueItems.size,
-            inheritedBaseCount = 0,
-            basePackLabel = null,
-            basePackPackage = null,
-            customComponents = explicitCustomComponents
-        )
+        }.getOrNull()
+
+        if (baseResources == null && !isNothingPack) {
+            return@withContext MergedPackPayload(
+                items = userQueueItems,
+                extras = AppFilterExtras(),
+                inMemoryPngBytesByFilename = emptyMap(),
+                userCustomizedCount = userQueueItems.size,
+                inheritedBaseCount = 0,
+                basePackLabel = null,
+                basePackPackage = null,
+                customComponents = explicitCustomComponents
+            )
+        }
 
         val basePackLabel = runCatching {
             val appInfo = pm.getApplicationInfo(basePackPackageName, 0)
-            pm.getApplicationLabel(appInfo).toString()
-        }.getOrDefault(basePackPackageName)
+            val raw = pm.getApplicationLabel(appInfo).toString()
+            if (isNothingPack && (raw.isBlank() || raw.equals("Nothing", ignoreCase = true))) {
+                "Nothing Icon Pack"
+            } else {
+                raw
+            }
+        }.getOrDefault(if (isNothingPack) "Nothing Icon Pack" else basePackPackageName)
 
-        onProgress("Reading Base Pack ($basePackLabel) appfilter.xml...")
-        val parsed = parseBasePackAppFilter(baseResources, basePackPackageName)
+        onProgress("Reading Base Pack ($basePackLabel)...")
+        val parsed = if (baseResources != null) {
+            parseBasePackAppFilter(baseResources, basePackPackageName)
+        } else {
+            ParsedBasePackFilter(
+                componentToDrawable = emptyMap(),
+                packageFallbackToDrawable = emptyMap(),
+                iconBackDrawables = emptyList(),
+                iconMaskDrawables = emptyList(),
+                iconUponDrawables = emptyList(),
+                scaleFactor = null
+            )
+        }
 
         val mergedItems = ArrayList<CustomIconQueueItem>(userQueueItems.size + installedApps.size)
         val usedSlots = HashSet<Int>()
@@ -382,13 +527,15 @@ class BaseIconPackManager(private val context: Context) {
         val drawableNameToSlotName = HashMap<String, String>()
 
         fun importBaseDrawableToSlot(baseDrawableName: String): String? {
+            val res = baseResources ?: return null
             drawableNameToSlotName[baseDrawableName]?.let { return it }
             val slot = allocateNextSlot() ?: return null
             val pngBytes = renderBasePackDrawableToPngBytes(
-                baseResources = baseResources,
+                baseResources = res,
                 basePackageName = basePackPackageName,
                 drawableName = baseDrawableName,
-                targetSize = 256
+                targetSize = 256,
+                ensureNothingBackdrop = false
             ) ?: run {
                 usedSlots.remove(slot)
                 return null
@@ -411,6 +558,8 @@ class BaseIconPackManager(private val context: Context) {
             scaleFactor = parsed.scaleFactor
         )
 
+        val systemMaskBitmap256 by lazy { createSystemIconMaskBitmap(256) }
+
         // 3. Match ONLY launchable apps currently installed on the user's device that aren't overridden
         var inheritedCount = 0
         for ((idx, installedApp) in installedApps.withIndex()) {
@@ -419,22 +568,49 @@ class BaseIconPackManager(private val context: Context) {
 
             val baseDrawableName = parsed.componentToDrawable[installedApp.componentInfo]
                 ?: parsed.packageFallbackToDrawable[installedApp.packageName]
-                ?: continue
+                ?: if (isNothingPack && baseResources != null) {
+                    findCandidateDrawableInPack(baseResources, basePackPackageName, installedApp)
+                } else {
+                    null
+                }
 
-            onProgress("Inheriting Base Pack icon for ${installedApp.appName} (${idx + 1}/${installedApps.size})...")
+            if (baseDrawableName == null && !isNothingPack) {
+                continue
+            }
+
+            onProgress("Applying $basePackLabel style to ${installedApp.appName} (${idx + 1}/${installedApps.size})...")
 
             val slot = allocateNextSlot() ?: break
             val slotName = "custom_icon_%03d".format(slot)
 
-            // Reuse PNG bytes if another activity of the same app used the exact same base drawable
-            val existingSlotForDrawable = drawableNameToSlotName[baseDrawableName]
-            val pngBytes = if (existingSlotForDrawable != null) {
-                inMemoryBytes["$existingSlotForDrawable.png"]
-            } else {
-                renderBasePackDrawableToPngBytes(
-                    baseResources = baseResources,
-                    basePackageName = basePackPackageName,
-                    drawableName = baseDrawableName,
+            var pngBytes: ByteArray? = null
+
+            if (baseDrawableName != null && baseResources != null) {
+                val existingSlotForDrawable = drawableNameToSlotName[baseDrawableName]
+                pngBytes = if (existingSlotForDrawable != null) {
+                    inMemoryBytes["$existingSlotForDrawable.png"]
+                } else {
+                    renderBasePackDrawableToPngBytes(
+                        baseResources = baseResources,
+                        basePackageName = basePackPackageName,
+                        drawableName = baseDrawableName,
+                        targetSize = 256,
+                        ensureNothingBackdrop = isNothingPack,
+                        systemMaskBitmap = if (isNothingPack) systemMaskBitmap256 else null
+                    )
+                }
+                if (pngBytes != null) {
+                    drawableNameToSlotName.putIfAbsent(baseDrawableName, slotName)
+                }
+            }
+
+            // Fallback for Nothing Icon Pack: synthesize the Nothing UI lowkey monochrome icon
+            // for any installed app that doesn't have a static entry in com.nothing.icon's appfilter.xml
+            if (pngBytes == null && isNothingPack) {
+                pngBytes = renderNothingMonochromeIconToPngBytes(
+                    pm = pm,
+                    installedApp = installedApp,
+                    systemMaskBitmap = systemMaskBitmap256,
                     targetSize = 256
                 )
             }
@@ -445,7 +621,6 @@ class BaseIconPackManager(private val context: Context) {
             }
 
             inMemoryBytes["$slotName.png"] = pngBytes
-            drawableNameToSlotName.putIfAbsent(baseDrawableName, slotName)
 
             mergedItems.add(
                 CustomIconQueueItem(
@@ -480,7 +655,7 @@ class BaseIconPackManager(private val context: Context) {
 
     /**
      * Parses `appfilter.xml` from an icon pack, checking:
-     * 1. `res/xml/appfilter.xml` via `XmlResourceParser`
+     * 1. `res/xml/appfilter.xml` (and `app_filter`, `icon_pack`) via `XmlResourceParser`
      * 2. `res/raw/appfilter.xml`
      * 3. `assets/appfilter.xml`
      */
@@ -502,13 +677,22 @@ class BaseIconPackManager(private val context: Context) {
                     when (parser.name) {
                         "item" -> {
                             val rawComp = parser.getAttributeValue(null, "component")
+                            val rawPkgAttr = parser.getAttributeValue(null, "package")
                             val rawDraw = parser.getAttributeValue(null, "drawable")
-                            if (!rawComp.isNullOrBlank() && !rawDraw.isNullOrBlank()) {
-                                val normalizedComp = normalizeComponentInfo(rawComp.trim())
-                                componentMap[normalizedComp] = rawDraw.trim()
-                                val pkg = extractPackageFromComponentInfo(normalizedComp)
-                                if (pkg != null) {
-                                    packageFallbackMap.putIfAbsent(pkg, rawDraw.trim())
+                            if (!rawDraw.isNullOrBlank()) {
+                                val drawTrimmed = rawDraw.trim()
+                                if (!rawComp.isNullOrBlank()) {
+                                    val normalizedComp = normalizeComponentInfo(rawComp.trim())
+                                    componentMap[normalizedComp] = drawTrimmed
+                                    val pkg = extractPackageFromComponentInfo(normalizedComp)
+                                    if (pkg != null) {
+                                        packageFallbackMap.putIfAbsent(pkg, drawTrimmed)
+                                    } else if (!rawComp.contains('/')) {
+                                        packageFallbackMap.putIfAbsent(rawComp.trim(), drawTrimmed)
+                                    }
+                                }
+                                if (!rawPkgAttr.isNullOrBlank()) {
+                                    packageFallbackMap.putIfAbsent(rawPkgAttr.trim(), drawTrimmed)
                                 }
                             }
                         }
@@ -533,12 +717,15 @@ class BaseIconPackManager(private val context: Context) {
             }
         }
 
-        // 1. Try res/xml/appfilter.xml via XmlResourceParser
-        val xmlResId = baseResources.getIdentifier("appfilter", "xml", basePkg)
-        if (xmlResId != 0) {
-            runCatching {
-                baseResources.getXml(xmlResId).use { xmlParser ->
-                    consumeParser(xmlParser)
+        // 1. Try res/xml/appfilter.xml (and common OEM variants) via XmlResourceParser
+        for (xmlName in listOf("appfilter", "app_filter", "icon_pack")) {
+            if (componentMap.isNotEmpty()) break
+            val xmlResId = baseResources.getIdentifier(xmlName, "xml", basePkg)
+            if (xmlResId != 0) {
+                runCatching {
+                    baseResources.getXml(xmlResId).use { xmlParser ->
+                        consumeParser(xmlParser)
+                    }
                 }
             }
         }
@@ -592,13 +779,18 @@ class BaseIconPackManager(private val context: Context) {
     }
 
     /**
-     * Normalizes shorthand `ComponentInfo{com.pkg/.MainActivity}` into full
+     * Normalizes shorthand `ComponentInfo{com.pkg/.MainActivity}` or `com.pkg/.MainActivity` into full
      * `ComponentInfo{com.pkg/com.pkg.MainActivity}` so it matches PackageManager's
      * `InstalledApp.componentInfo` format.
      */
     private fun normalizeComponentInfo(raw: String): String {
-        if (!raw.startsWith("ComponentInfo{") || !raw.endsWith("}")) return raw
-        val inner = raw.removePrefix("ComponentInfo{").removeSuffix("}")
+        val inner = if (raw.startsWith("ComponentInfo{") && raw.endsWith("}")) {
+            raw.removePrefix("ComponentInfo{").removeSuffix("}")
+        } else if (raw.contains('/')) {
+            raw
+        } else {
+            return raw
+        }
         val slashIdx = inner.indexOf('/')
         if (slashIdx <= 0) return raw
         val pkg = inner.substring(0, slashIdx)
@@ -614,11 +806,33 @@ class BaseIconPackManager(private val context: Context) {
         return if (slashIdx > 0) inner.substring(0, slashIdx) else null
     }
 
+    private fun findCandidateDrawableInPack(
+        baseResources: Resources,
+        basePackageName: String,
+        app: InstalledApp
+    ): String? {
+        val pkgUnderscore = app.packageName.replace('.', '_').lowercase()
+        val candidates = listOf(
+            pkgUnderscore,
+            "ic_$pkgUnderscore",
+            app.packageName.lowercase()
+        )
+        for (candidate in candidates) {
+            val dId = baseResources.getIdentifier(candidate, "drawable", basePackageName)
+            if (dId != 0) return candidate
+            val mId = baseResources.getIdentifier(candidate, "mipmap", basePackageName)
+            if (mId != 0) return candidate
+        }
+        return null
+    }
+
     private fun renderBasePackDrawableToPngBytes(
         baseResources: Resources,
         basePackageName: String,
         drawableName: String,
-        targetSize: Int = 256
+        targetSize: Int = 256,
+        ensureNothingBackdrop: Boolean = false,
+        systemMaskBitmap: Bitmap? = null
     ): ByteArray? {
         return runCatching {
             var resId = baseResources.getIdentifier(drawableName, "drawable", basePackageName)
@@ -628,11 +842,308 @@ class BaseIconPackManager(private val context: Context) {
             if (resId == 0) return null
 
             val drawable = baseResources.getDrawable(resId, null) ?: return null
-            val bmp = renderDrawableToBitmap(drawable, targetSize) ?: return null
+            val rawBmp = renderDrawableToBitmap(drawable, targetSize) ?: return null
+
+            val finalBmp = if (ensureNothingBackdrop && isForegroundOnlyGlyph(rawBmp)) {
+                val mask = systemMaskBitmap ?: createSystemIconMaskBitmap(targetSize)
+                compositeOnNothingDarkSurface(
+                    foregroundBmp = rawBmp,
+                    systemMaskBitmap = mask,
+                    targetSize = targetSize,
+                    tintToNothingWhite = false,
+                    glyphScale = 0.68f
+                )
+            } else {
+                rawBmp
+            }
+
             val out = ByteArrayOutputStream()
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+            finalBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
             out.toByteArray()
         }.getOrNull()
+    }
+
+    /**
+     * Synthesizes a Nothing OS Monochrome (lowkey Nothing UI style) icon for an installed app:
+     * 1. On Android 13+ (API 33+), uses the app's native `AdaptiveIconDrawable.monochrome` layer
+     *    if available, rendered at native AdaptiveIconDrawable bounds and tinted to `#E6E8EC`
+     *    over Nothing's `#1C1D1F` dark charcoal circular/system-masked surface.
+     * 2. If the app is an `AdaptiveIconDrawable` without a `<monochrome>` layer, converts its
+     *    `foreground` layer into a crisp monochrome glyph (preserving internal luminance contrast
+     *    for badges like IMDb while turning solid-color logos into clean `#E6E8EC` silhouettes).
+     * 3. For legacy non-adaptive icons, extracts the foreground glyph via `ProceduralThemeEngine`
+     *    and renders it in `#E6E8EC` over `#1C1D1F`.
+     */
+    private fun renderNothingMonochromeIconToPngBytes(
+        pm: PackageManager,
+        installedApp: InstalledApp,
+        systemMaskBitmap: Bitmap,
+        targetSize: Int = 256
+    ): ByteArray? {
+        return runCatching {
+            val rawDrawable = runCatching {
+                pm.getActivityIcon(ComponentName(installedApp.packageName, installedApp.activityName))
+            }.getOrNull() ?: runCatching {
+                pm.getApplicationIcon(installedApp.packageName)
+            }.getOrNull()
+
+            var resultBmp: Bitmap? = null
+
+            // Tier 1: Native Android 13+ AdaptiveIconDrawable.monochrome layer
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && rawDrawable is AdaptiveIconDrawable) {
+                val mono = rawDrawable.monochrome
+                if (mono != null) {
+                    val monoLayerBmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+                    val monoCanvas = Canvas(monoLayerBmp)
+                    val adaptiveMono = AdaptiveIconDrawable(
+                        ColorDrawable(Color.TRANSPARENT),
+                        mono.mutate()
+                    )
+                    adaptiveMono.setBounds(0, 0, targetSize, targetSize)
+                    adaptiveMono.draw(monoCanvas)
+
+                    val coverage = computeOpaqueCoverage(monoLayerBmp)
+                    if (coverage in 0.015f..0.72f) {
+                        resultBmp = compositeOnNothingDarkSurface(
+                            foregroundBmp = monoLayerBmp,
+                            systemMaskBitmap = systemMaskBitmap,
+                            targetSize = targetSize,
+                            tintToNothingWhite = true,
+                            glyphScale = 1.0f
+                        )
+                    }
+                }
+            }
+
+            // Tier 2: AdaptiveIconDrawable.foreground monochrome conversion
+            if (resultBmp == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && rawDrawable is AdaptiveIconDrawable) {
+                val fg = rawDrawable.foreground
+                if (fg != null) {
+                    val fgLayerBmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+                    val fgCanvas = Canvas(fgLayerBmp)
+                    val adaptiveFg = AdaptiveIconDrawable(
+                        ColorDrawable(Color.TRANSPARENT),
+                        fg.mutate()
+                    )
+                    adaptiveFg.setBounds(0, 0, targetSize, targetSize)
+                    adaptiveFg.draw(fgCanvas)
+
+                    val coverage = computeOpaqueCoverage(fgLayerBmp)
+                    if (coverage in 0.01f..0.54f) {
+                        val monoFg = convertAdaptiveForegroundToNothingMonochrome(fgLayerBmp)
+                        resultBmp = compositeOnNothingDarkSurface(
+                            foregroundBmp = monoFg,
+                            systemMaskBitmap = systemMaskBitmap,
+                            targetSize = targetSize,
+                            tintToNothingWhite = false,
+                            glyphScale = 1.0f
+                        )
+                    }
+                }
+            }
+
+            // Tier 3: Procedural foreground silhouette extraction fallback
+            if (resultBmp == null) {
+                val extractedGlyph = ProceduralThemeEngine.extractAppForegroundGlyph(
+                    context = context,
+                    app = installedApp,
+                    targetSize = targetSize
+                )
+                resultBmp = compositeOnNothingDarkSurface(
+                    foregroundBmp = extractedGlyph,
+                    systemMaskBitmap = systemMaskBitmap,
+                    targetSize = targetSize,
+                    tintToNothingWhite = true,
+                    glyphScale = 0.64f
+                )
+            }
+
+            val out = ByteArrayOutputStream()
+            resultBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+            out.toByteArray()
+        }.getOrNull()
+    }
+
+    private fun convertAdaptiveForegroundToNothingMonochrome(src: Bitmap): Bitmap {
+        val w = src.width
+        val h = src.height
+        val pixels = IntArray(w * h)
+        src.getPixels(pixels, 0, w, 0, 0, w, h)
+
+        var opaqueCount = 0
+        var lumSum = 0.0
+        var lumSqSum = 0.0
+        for (px in pixels) {
+            val a = Color.alpha(px)
+            if (a > 60) {
+                opaqueCount++
+                val lum = 0.299 * Color.red(px) + 0.587 * Color.green(px) + 0.114 * Color.blue(px)
+                lumSum += lum
+                lumSqSum += lum * lum
+            }
+        }
+
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        if (opaqueCount == 0) return out
+
+        val meanLum = lumSum / opaqueCount
+        val variance = (lumSqSum / opaqueCount) - (meanLum * meanLum)
+        val stdDev = sqrt(variance.coerceAtLeast(0.0))
+
+        val fgR = Color.red(NOTHING_FG_COLOR)
+        val fgG = Color.green(NOTHING_FG_COLOR)
+        val fgB = Color.blue(NOTHING_FG_COLOR)
+
+        // If the foreground logo is mostly single-tone, render it as a crisp solid Nothing off-white silhouette
+        if (stdDev < 30.0) {
+            for (i in pixels.indices) {
+                val a = Color.alpha(pixels[i])
+                pixels[i] = if (a < 16) 0 else Color.argb(a, fgR, fgG, fgB)
+            }
+            out.setPixels(pixels, 0, w, 0, 0, w, h)
+            return out
+        }
+
+        // For multi-tone foregrounds (e.g. a badge with internal text or multi-shade symbol),
+        // map luminance into monochrome shades so internal details stay sharp and legible.
+        val bgR = Color.red(NOTHING_BG_COLOR)
+        val bgG = Color.green(NOTHING_BG_COLOR)
+        val bgB = Color.blue(NOTHING_BG_COLOR)
+
+        for (i in pixels.indices) {
+            val px = pixels[i]
+            val a = Color.alpha(px)
+            if (a < 16) {
+                pixels[i] = 0
+                continue
+            }
+            val lum = (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px)) / 255f
+            val t = (0.22f + 0.78f * lum).coerceIn(0f, 1f)
+            val r = (bgR + (fgR - bgR) * t).toInt().coerceIn(0, 255)
+            val g = (bgG + (fgG - bgG) * t).toInt().coerceIn(0, 255)
+            val b = (bgB + (fgB - bgB) * t).toInt().coerceIn(0, 255)
+            pixels[i] = Color.argb(a, r, g, b)
+        }
+        out.setPixels(pixels, 0, w, 0, 0, w, h)
+        return out
+    }
+
+    private fun compositeOnNothingDarkSurface(
+        foregroundBmp: Bitmap,
+        systemMaskBitmap: Bitmap,
+        targetSize: Int,
+        tintToNothingWhite: Boolean,
+        glyphScale: Float
+    ): Bitmap {
+        val out = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+
+        // 1. Fill Nothing dark charcoal surface (#1C1D1F)
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = NOTHING_BG_COLOR
+        }
+        canvas.drawRect(0f, 0f, targetSize.toFloat(), targetSize.toFloat(), bgPaint)
+
+        // 2. Draw foreground glyph centered
+        val fgPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            if (tintToNothingWhite) {
+                colorFilter = PorterDuffColorFilter(NOTHING_FG_COLOR, PorterDuff.Mode.SRC_IN)
+            }
+        }
+        val boxSize = targetSize * glyphScale
+        val offset = (targetSize - boxSize) / 2f
+        val destRect = RectF(offset, offset, offset + boxSize, offset + boxSize)
+        canvas.drawBitmap(foregroundBmp, null, destRect, fgPaint)
+
+        // 3. Apply device's native AdaptiveIconDrawable mask (circle on Nothing OS)
+        val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+        }
+        canvas.drawBitmap(systemMaskBitmap, 0f, 0f, maskPaint)
+        return out
+    }
+
+    private fun createSystemIconMaskBitmap(size: Int): Bitmap {
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val adaptive = AdaptiveIconDrawable(ColorDrawable(Color.WHITE), null)
+            adaptive.setBounds(0, 0, size, size)
+            adaptive.draw(canvas)
+        } else {
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+            canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        }
+        return bmp
+    }
+
+    private fun isForegroundOnlyGlyph(bmp: Bitmap): Boolean {
+        val w = bmp.width
+        val h = bmp.height
+        val cx = w / 2f
+        val cy = h / 2f
+        val radius = w * 0.38f
+        var transparentSamples = 0
+        for (i in 0 until 8) {
+            val angle = i * (Math.PI / 4.0)
+            val x = (cx + radius * cos(angle)).toInt().coerceIn(0, w - 1)
+            val y = (cy + radius * sin(angle)).toInt().coerceIn(0, h - 1)
+            if (Color.alpha(bmp.getPixel(x, y)) < 40) {
+                transparentSamples++
+            }
+        }
+        return transparentSamples >= 6
+    }
+
+    private fun computeOpaqueCoverage(bmp: Bitmap): Float {
+        val w = bmp.width
+        val h = bmp.height
+        val pixels = IntArray(w * h)
+        bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+        var opaque = 0
+        for (px in pixels) {
+            if (Color.alpha(px) > 40) opaque++
+        }
+        return opaque.toFloat() / (w * h).coerceAtLeast(1)
+    }
+
+    private fun createNothingPackBadgeBitmap(size: Int): Bitmap {
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val cx = size / 2f
+        val cy = size / 2f
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = NOTHING_BG_COLOR
+        }
+        canvas.drawCircle(cx, cy, size * 0.46f, bgPaint)
+
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = size * 0.03f
+            color = 0xFF34363A.toInt()
+        }
+        canvas.drawCircle(cx, cy, size * 0.45f, borderPaint)
+
+        // Draw Nothing-style dot-matrix glyph in off-white
+        val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = NOTHING_FG_COLOR
+        }
+        val dotRadius = size * 0.042f
+        val spacing = size * 0.12f
+        val coords = listOf(
+            -1 to -1, -1 to 0, -1 to 1,
+            0 to -0.3f, 0 to 0.3f,
+            1 to -1, 1 to 0, 1 to 1
+        )
+        for ((gx, gy) in coords) {
+            canvas.drawCircle(
+                cx + gx.toFloat() * spacing,
+                cy + gy.toFloat() * spacing,
+                dotRadius,
+                dotPaint
+            )
+        }
+        return bmp
     }
 
     private fun renderDrawableToBitmap(drawable: Drawable, size: Int): Bitmap? {
@@ -647,7 +1158,16 @@ class BaseIconPackManager(private val context: Context) {
 
     companion object {
         const val ICONCRAFT_PACK_PKG = "com.iconcraft.pack"
+        const val NOTHING_ICON_PACK_PKG = "com.nothing.icon"
+        private const val NOTHING_BG_COLOR = 0xFF1C1D1F.toInt()
+        private const val NOTHING_FG_COLOR = 0xFFE6E8EC.toInt()
         private const val PREFS_NAME = "iconcraft_base_pack_prefs"
         private const val KEY_BASE_PACK_PKG = "selected_base_pack_package"
+
+        fun isNothingIconPack(packageName: String?): Boolean {
+            if (packageName.isNullOrBlank()) return false
+            return packageName == NOTHING_ICON_PACK_PKG ||
+                packageName.startsWith("com.nothing.icon")
+        }
     }
 }

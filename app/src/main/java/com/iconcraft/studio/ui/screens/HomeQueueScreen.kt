@@ -660,9 +660,11 @@ private fun BaseIconPackSelectorCard(
                 )
                 Text(
                     text = if (selectedBasePack != null) {
-                        "Inherits ${selectedBasePack.packLabel} icons & masks for non-customized apps"
+                        "Inherits ${selectedBasePack.packLabel} for all non-customized apps"
+                    } else if (installedPackCount > 0) {
+                        "Nothing Icon Pack & $installedPackCount pack(s) ready • Tap to select"
                     } else {
-                        "$installedPackCount installed third-party pack(s) detected • Tap to change"
+                        "Tap to select Nothing Icon Pack or an installed icon pack"
                     },
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -798,13 +800,12 @@ private fun BaseIconPackPickerDialog(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = pack.packageName,
+                                    text = pack.subtitle ?: pack.packageName,
                                     style = MaterialTheme.typography.bodySmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp
+                                        fontSize = 11.sp
                                     ),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
+                                    maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
