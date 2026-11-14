@@ -162,7 +162,7 @@ fun BrandApplyGuideCard(
                 )
             }
 
-            if (canPinWidget && onPinWidgetClick != null) {
+            if (!guide.supportsNativeIconPack && canPinWidget && onPinWidgetClick != null) {
                 Spacer(modifier = Modifier.height(10.dp))
                 FilledTonalButton(
                     onClick = onPinWidgetClick,

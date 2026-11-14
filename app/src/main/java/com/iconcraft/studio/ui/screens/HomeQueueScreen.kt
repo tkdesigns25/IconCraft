@@ -36,7 +36,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.SystemUpdateAlt
-import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -477,7 +476,6 @@ fun HomeQueueScreen(
                         QueueItemCard(
                             item = item,
                             onEdit = { onEditQueueItem(item) },
-                            onPinWidget = { onPinWidgetItem(item) },
                             onRemove = { onRemoveQueueItem(item) }
                         )
                     }
@@ -973,7 +971,6 @@ private fun TemplateStatusBanner(
 private fun QueueItemCard(
     item: CustomIconQueueItem,
     onEdit: () -> Unit,
-    onPinWidget: () -> Unit,
     onRemove: () -> Unit
 ) {
     Surface(
@@ -1092,14 +1089,7 @@ private fun QueueItemCard(
                     )
                 }
 
-                // 1x1 Widget, Edit & Remove buttons
-                IconButton(onClick = onPinWidget) {
-                    Icon(
-                        imageVector = Icons.Default.Widgets,
-                        contentDescription = "Pin 1x1 Home Widget",
-                        tint = EmeraldAccent
-                    )
-                }
+                // Edit & Remove buttons
                 IconButton(onClick = onEdit) {
                     Icon(
                         imageVector = Icons.Default.Edit,
