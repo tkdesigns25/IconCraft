@@ -87,17 +87,45 @@ object ProceduralThemeEngine {
         app: InstalledApp,
         targetSize: Int = 256
     ): Bitmap {
+        val pm = context.packageManager
+        val drawable = runCatching {
+            pm.getActivityIcon(ComponentName(app.packageName, app.activityName))
+        }.getOrNull() ?: runCatching {
+            pm.getApplicationIcon(app.packageName)
+        }.getOrNull()
+
+        // 1. On Android 13+ (API 33+), prefer the official AdaptiveIconDrawable.monochrome glyph if present
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && drawable is AdaptiveIconDrawable) {
+            val monoBmp = runCatching {
+                drawable.setBounds(0, 0, targetSize, targetSize)
+                val mono = drawable.monochrome?.mutate() ?: return@runCatching null
+                val bmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(bmp)
+                val inset = -(targetSize * 0.16f).toInt()
+                mono.colorFilter = null
+                mono.setBounds(inset, inset, targetSize - inset, targetSize - inset)
+                mono.draw(canvas)
+                bmp
+            }.getOrNull()
+
+            if (monoBmp != null && hasTransparentPerimeter(monoBmp)) {
+                val normalized = normalizeForegroundAlphaMask(monoBmp)
+                if (hasSufficientVisiblePixels(normalized)) {
+                    return normalized
+                }
+            }
+        }
+
+        // 2. Otherwise extract AdaptiveIconDrawable.foreground
         val rawForeground = runCatching {
-            val pm = context.packageManager
-            val drawable = pm.getActivityIcon(ComponentName(app.packageName, app.activityName))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && drawable is AdaptiveIconDrawable) {
-                val fg = drawable.foreground
+                drawable.setBounds(0, 0, targetSize, targetSize)
+                val fg = drawable.foreground?.mutate()
                 if (fg != null) {
                     val bmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
                     val canvas = Canvas(bmp)
-                    // AdaptiveIconDrawable foregrounds have an 18% outer safe-zone margin;
-                    // inset bounds slightly outward so the central 72dp glyph fills targetSize cleanly.
                     val inset = -(targetSize * 0.16f).toInt()
+                    fg.colorFilter = null
                     fg.setBounds(inset, inset, targetSize - inset, targetSize - inset)
                     fg.draw(canvas)
                     bmp
@@ -108,15 +136,32 @@ object ProceduralThemeEngine {
         }.getOrNull()
 
         if (rawForeground != null && hasTransparentPerimeter(rawForeground)) {
-            return normalizeForegroundAlphaMask(rawForeground)
+            val normalized = normalizeForegroundAlphaMask(rawForeground)
+            if (hasSufficientVisiblePixels(normalized)) {
+                return normalized
+            }
         }
 
-        // Legacy icon or full-bleed adaptive foreground: strip perimeter background color & extract luminance/saturation silhouette
-        val fallbackSource = rawForeground
+        // 3. Legacy icon or full-bleed adaptive foreground: strip perimeter background color & extract luminance/saturation silhouette
+        val fallbackSource = rawForeground?.takeIf { hasSufficientVisiblePixels(it) }
             ?: app.iconBitmap?.let { Bitmap.createScaledBitmap(it, targetSize, targetSize, true) }
             ?: Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
 
         return stripLegacyBackgroundToSilhouette(fallbackSource)
+    }
+
+    private fun hasSufficientVisiblePixels(bmp: Bitmap): Boolean {
+        val w = bmp.width
+        val h = bmp.height
+        var count = 0
+        for (y in 0 until h step 2) {
+            for (x in 0 until w step 2) {
+                if (Color.alpha(bmp.getPixel(x, y)) > 48) {
+                    count++
+                }
+            }
+        }
+        return count > ((w / 2) * (h / 2)) / 50
     }
 
     /**
