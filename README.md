@@ -1,63 +1,120 @@
+<div align="center">
+
+<img src="app/src/main/res/drawable-nodpi/ic_launcher.png" alt="IconCraft Icon" width="100" />
+
 # IconCraft
 
-Change the icon of *any* specific app on your Android phone (like Letterboxd, Spotify, or Instagram) using your own images. No subscriptions, no ads, and all your other apps stay untouched.
+**Custom icons for any app you choose — no subscriptions, no custom launcher required.**
 
-### 👉 [**Download Latest APK from GitHub Releases**](../../releases/latest)
+[![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](#will-it-work-on-my-phone)
+[![100% Offline](https://img.shields.io/badge/100%25_Offline-Zero_Internet_Permission-0A84FF?style=flat-square&logo=shield&logoColor=white)](#privacy--play-protect-faq)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-orange?style=flat-square)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/tkdesigns25/IconCraft?style=flat-square&label=Release&color=brightgreen)](../../releases/latest)
+[![Android CI](https://img.shields.io/github/actions/workflow/status/tkdesigns25/IconCraft/android-ci.yml?branch=main&style=flat-square&label=Android%20CI)](https://github.com/tkdesigns25/IconCraft/actions/workflows/android-ci.yml)
 
----
+[**Download**](https://github.com/tkdesigns25/IconCraft/releases/latest) • [**Features**](#-features) • [**Compatibility**](#-will-it-work-on-my-phone) • [**How It Works**](#-how-to-use) • [**FAQ**](#-privacy--play-protect-faq)
 
-## Screenshots
+<br />
 
-> _Screenshots coming soon! Drop your home screen and app screenshots here._
+<a href="https://github.com/tkdesigns25/IconCraft/releases/latest">
+  <img src="https://img.shields.io/badge/⬇_Download_Latest_APK-GitHub_Releases-2ea44f?style=for-the-badge&logo=github" alt="Download Latest APK" />
+</a>
 
-<!--
-| Home Screen | Icon Studio | Apply Guide | Auto-Theme Lab |
-| :---: | :---: | :---: | :---: |
-| ![Home](docs/screenshots/home.png) | ![Studio](docs/screenshots/studio.png) | ![Apply](docs/screenshots/apply.png) | ![Lab](docs/screenshots/lab.png) |
--->
-
----
-
-## What It Can Do
-
-- **Change only the apps you pick:** Swap just Letterboxd (or a few favorite apps) while keeping the rest of your phone completely normal.
-- **Keep your current icon pack:** Already using an icon pack you love? IconCraft can merge your custom icons with your existing pack so you don't lose your home screen style.
-- **Easy built-in editor:** Crop, zoom, adjust padding, round corners, and pick background colors without needing another editing app.
-- **Auto-Theme Lab (Experimental):** Upload 1 movie poster or wallpaper and instantly match *all* your apps to its colors and style (Poster Texture, Neon Glow, Minimal) — runs 100% on your phone with zero AI subscriptions.
-- **1×1 Home Widget mode:** Even on phones that block custom icon packs (like Google Pixel), drop clean custom app icons onto your Home Screen with no ugly watermarks.
+</div>
 
 ---
 
-## Will It Work on My Phone?
+## 📸 Screenshots
 
-- **Works natively (no extra launcher needed):** OnePlus, Oppo, Realme, Nothing Phone, Samsung (using Good Lock → Theme Park), and newer Xiaomi (HyperOS 3+).
-- **Works on any Android phone** if you use a custom launcher like Nova Launcher, Lawnchair, or Smart Launcher.
-- **Google Pixel / Motorola / Stock Android:** Use the built-in **1×1 Widget** option (changes Home Screen icons, though App Drawer icons stay default) or use a custom launcher.
-- **iPhone (iOS):** Not supported (Android only).
+<div align="center">
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <!-- Drop screenshot at docs/screenshots/home.png and uncomment: -->
+      <!-- <img src="docs/screenshots/home.png" width="240" alt="Home Screen & Queue" /> -->
+      <em>Home & Base Pack Queue</em>
+    </td>
+    <td align="center" width="33%">
+      <!-- Drop screenshot at docs/screenshots/studio.png and uncomment: -->
+      <!-- <img src="docs/screenshots/studio.png" width="240" alt="Icon Studio Editor" /> -->
+      <em>Built-in Icon Studio</em>
+    </td>
+    <td align="center" width="33%">
+      <!-- Drop screenshot at docs/screenshots/lab.png and uncomment: -->
+      <!-- <img src="docs/screenshots/lab.png" width="240" alt="Auto-Theme Lab" /> -->
+      <em>Auto-Theme Lab</em>
+    </td>
+  </tr>
+</table>
+
+<sub><i>Drop your screenshot PNGs into <code>docs/screenshots/</code> and uncomment the <code>&lt;img&gt;</code> tags above to display them side-by-side.</i></sub>
+</div>
 
 ---
 
-## How to Use It
+## ✨ Features
 
-1. Download and install the latest `.apk` from [**Releases**](../../releases/latest).
-2. Open IconCraft, tap **Customize an App**, pick your app (e.g., Letterboxd), and choose any photo from your gallery.
-3. Tap **Build & Install Icon Pack** — Android will ask you to install the personal icon pack your phone just created.
-4. Follow the 2-step guide shown on screen for your phone brand to apply **IconCraft Pack**.
-
----
-
-## Is It Safe? / Why Does Play Protect Warn Me?
-
-- **100% Offline:** IconCraft doesn't even have permission to access the internet. Your photos and app list never leave your phone.
-- **Why Android shows a warning:** Because the app isn't on the Google Play Store and builds your custom icon pack directly on your device, Android/Play Protect shows a standard "Unknown app" prompt.
-- **Why it asks to see installed apps & install packages:** Only so you can pick which app's icon to change and install the custom icon pack you just made.
+- 🎯 **Pick Only the Apps You Want** — Swap just *Letterboxd*, *Spotify*, or a few favorites using your own images; every other app on your phone stays completely untouched.
+- 🧩 **Keep Your Existing Icon Pack** — Already using an icon pack you love? Select it as your **Base Pack** and IconCraft will merge your custom overrides right on top of it.
+- 🎨 **Built-in Icon Studio** — Crop, zoom, adjust inner image padding, toggle rounded corners, and pick matching background colors without needing an external photo editor.
+- 🧪 **Auto-Theme Lab (Experimental)** — Upload a single movie poster or wallpaper to automatically style your apps in matching colors (*Poster Texture*, *Neon Glow*, or *Minimal*) — 100% offline with zero AI subscriptions.
+- 📱 **1×1 Home Widget Fallback** — Even on phones that block custom icon packs (like Google Pixel), place clean custom icons on your Home Screen with **no ugly shortcut watermarks**.
 
 ---
 
-## For Developers (Build from Source)
+## 📱 Will It Work on My Phone?
+
+| Phone / Setup | Support Level | How It Works |
+| :--- | :--- | :--- |
+| **OnePlus / Oppo / Realme** *(OxygenOS / ColorOS / Realme UI)* | ✅ **Full Native Support** | Apply directly in Home Screen settings → *Icons* → **IconCraft Pack** |
+| **Nothing Phone** *(Nothing OS)* | ✅ **Full Native Support** | Long-press Home Screen → *Customization* → *Icon pack* → **IconCraft Pack** |
+| **Samsung Galaxy** *(One UI)* | ⚠️ **Via Good Lock** | Apply using Samsung's official **Good Lock → Theme Park → Icon → Iconpack** |
+| **Xiaomi / Poco / Redmi** | ⚠️ **HyperOS 3+ / Widget** | Native icon pack support on newer HyperOS 3+ launchers; **1×1 Widget** on older MIUI |
+| **Any Android + Custom Launcher** *(Nova, Lawnchair, Smart Launcher, Niagara)* | ✅ **Full Native Support** | Select **IconCraft Pack** in your launcher's icon pack settings or per-app editor |
+| **Google Pixel / Motorola / Stock Android** | 🧩 **1×1 Widget / Custom Launcher** | Use IconCraft's **1×1 Home Widget** (watermark-free on Home Screen) or a custom launcher |
+| **iPhone** *(iOS)* | ❌ **Not Supported** | Android only (requires Android 8.0 or newer) |
+
+---
+
+## 🚀 How to Use
+
+1. **Install IconCraft:** Download the latest `.apk` from [**GitHub Releases**](https://github.com/tkdesigns25/IconCraft/releases/latest) and open it on your phone.
+2. **Design Your Icon:** Tap **Customize an App**, pick the app you want to change (e.g., *Letterboxd*), and select any image from your gallery.
+3. **Build Your Pack:** Tap **Build & Install Icon Pack** — your phone will package and prompt you to install your personal `IconCraft Pack`.
+4. **Apply & Enjoy:** Follow the quick 2-step guide shown inside the app for your phone brand to activate **IconCraft Pack**.
+
+> [!TIP]
+> **Want to add or edit more icons later?** Just open IconCraft, add or edit an app in your queue, and tap **Build & Install Icon Pack** again. It updates your existing pack in place so you don't lose any of your previous custom icons.
+
+---
+
+## 🔒 Privacy & Play Protect FAQ
+
+> [!NOTE]
+> **Zero `INTERNET` permission. Zero ads. Zero tracking.**
+> IconCraft is 100% offline — it does not even ask Android for internet access. Your photos and installed app list never leave your phone.
 
 <details>
-<summary><strong>Click to expand build instructions & technical architecture</strong></summary>
+<summary><strong>Why does Android / Google Play Protect show an "Unknown app" warning?</strong></summary>
+<br />
+Because IconCraft is an independent open-source app distributed on GitHub (not the Google Play Store) and builds a custom icon pack APK directly on your phone, Android's Play Protect displays a standard prompt for newly generated apps. Tap <b>Scan app</b> or <b>More details → Install anyway</b> to finish installing.
+</details>
+
+<details>
+<summary><strong>Why does IconCraft ask to see installed apps and install packages?</strong></summary>
+<br />
+<ul>
+  <li><b>See installed apps (<code>QUERY_ALL_PACKAGES</code>):</b> Needed so IconCraft can show your list of apps (and any existing icon packs you want to merge) when you pick which icon to customize.</li>
+  <li><b>Install unknown apps (<code>REQUEST_INSTALL_PACKAGES</code>):</b> Needed so IconCraft can hand the custom icon pack it just built over to Android's system installer.</li>
+</ul>
+</details>
+
+---
+
+## 🛠️ For Developers
+
+<details>
+<summary><strong>Build from source & technical details</strong></summary>
 
 ### Prerequisites
 - **JDK 17**
@@ -98,6 +155,6 @@ Then run:
 
 ---
 
-## License
-
-Licensed under the [Apache License, Version 2.0](LICENSE).
+<div align="center">
+  <sub>Licensed under the <a href="LICENSE">Apache License, Version 2.0</a>.</sub>
+</div>
