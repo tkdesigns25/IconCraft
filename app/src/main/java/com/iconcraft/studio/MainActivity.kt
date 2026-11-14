@@ -240,9 +240,6 @@ private fun IconCraftApp(
                     selectedBasePackPackage = fetched.restoredBasePackPackage
                 }
                 isLoadingApps = false
-                snackbarHostState.showSnackbar(
-                    "Found active IconCraft Pack (${fetched.newlyImportedCount} icons) — automatically retained into Queue"
-                )
                 return@LaunchedEffect
             }
         }
@@ -355,9 +352,6 @@ private fun IconCraftApp(
                                 queueStorage.saveQueue(queueItems.toList())
                                 CustomIconWidgetProvider.refreshAllWidgets(context)
                                 currentScreen = ActiveScreen.HOME_QUEUE
-                                snackbarHostState.showSnackbar(
-                                    "Saved 512×512 custom icon for ${targetApp.appName} (${updatedItem.drawableName})"
-                                )
                             }
                         },
                         onCancel = {
@@ -435,7 +429,6 @@ private fun IconCraftApp(
                         queueItems.removeAll { it.app.componentInfo == item.app.componentInfo }
                         scope.launch {
                             queueStorage.saveQueue(queueItems.toList())
-                            snackbarHostState.showSnackbar("Removed ${item.app.appName} from queue")
                         }
                     },
                     onPinWidgetItem = { item ->

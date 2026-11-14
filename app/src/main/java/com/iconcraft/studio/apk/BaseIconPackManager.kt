@@ -30,8 +30,6 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.ByteArrayOutputStream
 import kotlin.math.cos
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -859,7 +857,7 @@ class BaseIconPackManager(private val context: Context) {
                         systemMaskBitmap = nothingSurfaceMask,
                         targetSize = targetSize,
                         tintToNothingWhite = isDarkGlyph,
-                        glyphScale = 1.0f
+                        glyphScale = 0.90f
                     )
                 } else {
                     applySystemMask(bmp, nothingSurfaceMask, targetSize)
@@ -912,7 +910,7 @@ class BaseIconPackManager(private val context: Context) {
 
                 val monoLayerBmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
                 val monoCanvas = Canvas(monoLayerBmp)
-                val inset = -(targetSize * 0.21f).toInt()
+                val inset = -(targetSize * 0.25f).toInt()
                 mono.colorFilter = null
                 mono.setBounds(inset, inset, targetSize - inset, targetSize - inset)
                 mono.draw(monoCanvas)
@@ -932,7 +930,12 @@ class BaseIconPackManager(private val context: Context) {
                         systemMaskBitmap = systemMaskBitmap,
                         targetSize = targetSize,
                         tintToNothingWhite = true,
-                        glyphScale = 1.0f
+                        glyphScale = 0.90f
+                    )
+                    coverage > 0.68f && hasTransparentCenterCutout(monoLayerBmp) -> invertStencilCutoutOnNothingSurface(
+                        src = monoLayerBmp,
+                        systemMaskBitmap = systemMaskBitmap,
+                        targetSize = targetSize
                     )
                     coverage > 0.68f -> renderFullBitmapAsNothingMonochrome(
                         src = monoLayerBmp,
@@ -959,7 +962,7 @@ class BaseIconPackManager(private val context: Context) {
 
                 val fgLayerBmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
                 val fgCanvas = Canvas(fgLayerBmp)
-                val inset = -(targetSize * 0.20f).toInt()
+                val inset = -(targetSize * 0.25f).toInt()
                 fg.colorFilter = null
                 fg.setBounds(inset, inset, targetSize - inset, targetSize - inset)
                 fg.draw(fgCanvas)
@@ -972,7 +975,7 @@ class BaseIconPackManager(private val context: Context) {
                         systemMaskBitmap = systemMaskBitmap,
                         targetSize = targetSize,
                         tintToNothingWhite = false,
-                        glyphScale = 1.0f
+                        glyphScale = 0.90f
                     )
                 } else {
                     null
@@ -1097,73 +1100,88 @@ class BaseIconPackManager(private val context: Context) {
         val fgG = Color.green(NOTHING_FG_COLOR)
         val fgB = Color.blue(NOTHING_FG_COLOR)
 
-        // Check if foreground actually contains an opaque inner badge/container shell
+        // Check if foreground actually contains an opaque inner badge/container shell (solid OR gradient)
         val bw = (maxX - minX + 1).coerceAtLeast(1)
         val bh = (maxY - minY + 1).coerceAtLeast(1)
-        if (coverage >= 0.24f && bw >= 24 && bh >= 24) {
+        if (coverage >= 0.22f && bw >= 24 && bh >= 24) {
             val fcx = (minX + maxX) / 2f
             val fcy = (minY + maxY) / 2f
-            val shellSamples = ArrayList<Int>(32)
-            for (ringFrac in floatArrayOf(0.36f, 0.43f)) {
-                val rx = bw * ringFrac
-                val ry = bh * ringFrac
-                for (i in 0 until 16) {
-                    val angle = i * (Math.PI / 8.0)
-                    val sx = (fcx + rx * cos(angle)).toInt().coerceIn(0, w - 1)
-                    val sy = (fcy + ry * sin(angle)).toInt().coerceIn(0, h - 1)
-                    val px = pixels[sy * w + sx]
-                    if (Color.alpha(px) > 140) shellSamples.add(px)
-                }
-            }
+            val anchors = collectRingAnchors(
+                pixels = pixels,
+                w = w,
+                h = h,
+                cx = fcx,
+                cy = fcy,
+                rxPrimary = bw * 0.38f,
+                ryPrimary = bh * 0.38f,
+                rxSecondary = bw * 0.32f,
+                rySecondary = bh * 0.32f
+            )
 
-            if (shellSamples.size >= 18) {
-                val (shellR, shellG, shellB, shellUniformity) = findMedoidRgb(shellSamples, tolerance = 42f)
+            if (anchors.size >= 12) {
+                val anchorColors = anchors.map { it.argb }
+                val medoid = findMedoidRgb(anchorColors, tolerance = 42f)
+                val adjDist = meanAdjacentAnchorDistance(anchors)
+                val isSmoothOrSolidShell = medoid.matchFraction >= 0.50f || adjDist <= 48f
 
-                var coreOpaque = 0
-                var coreContrast = 0
-                val coreRx = (bw * 0.24f).toInt().coerceAtLeast(4)
-                val coreRy = (bh * 0.24f).toInt().coerceAtLeast(4)
-                val cyi = fcy.toInt()
-                val cxi = fcx.toInt()
-                for (y in (cyi - coreRy)..(cyi + coreRy) step 2) {
-                    if (y !in 0 until h) continue
-                    for (x in (cxi - coreRx)..(cxi + coreRx) step 2) {
-                        if (x !in 0 until w) continue
-                        val px = pixels[y * w + x]
-                        if (Color.alpha(px) > 120) {
-                            coreOpaque++
-                            if (rgbDistance(px, shellR, shellG, shellB) > 36f) {
-                                coreContrast++
+                if (isSmoothOrSolidShell) {
+                    val useIdw = medoid.matchFraction < 0.72f
+                    var coreOpaque = 0
+                    var coreContrast = 0
+                    val coreRx = (bw * 0.24f).toInt().coerceAtLeast(4)
+                    val coreRy = (bh * 0.24f).toInt().coerceAtLeast(4)
+                    val cyi = fcy.toInt()
+                    val cxi = fcx.toInt()
+                    for (y in (cyi - coreRy)..(cyi + coreRy) step 2) {
+                        if (y !in 0 until h) continue
+                        for (x in (cxi - coreRx)..(cxi + coreRx) step 2) {
+                            if (x !in 0 until w) continue
+                            val px = pixels[y * w + x]
+                            if (Color.alpha(px) > 120) {
+                                coreOpaque++
+                                val dist = if (useIdw) {
+                                    distanceToInterpolatedAnchors(px, x.toFloat(), y.toFloat(), anchors)
+                                } else {
+                                    rgbDistance(px, medoid.r, medoid.g, medoid.b)
+                                }
+                                if (dist > 34f) coreContrast++
                             }
                         }
                     }
-                }
-                val coreContrastRatio = if (coreOpaque > 0) coreContrast.toFloat() / coreOpaque else 0f
+                    val coreContrastRatio = if (coreOpaque > 0) coreContrast.toFloat() / coreOpaque else 0f
 
-                // If foreground is a container shell (white disk, orange card, etc.) with an inner logo:
-                if (shellUniformity >= 0.55f && coreContrastRatio >= 0.05f) {
-                    for (i in pixels.indices) {
-                        val px = pixels[i]
-                        val a = Color.alpha(px)
-                        if (a < 16) {
-                            pixels[i] = 0
-                            continue
+                    if (coreContrastRatio >= 0.045f) {
+                        for (y in 0 until h) {
+                            val rowOffset = y * w
+                            for (x in 0 until w) {
+                                val idx = rowOffset + x
+                                val px = pixels[idx]
+                                val a = Color.alpha(px)
+                                if (a < 16) {
+                                    pixels[idx] = 0
+                                    continue
+                                }
+                                val dist = if (useIdw) {
+                                    distanceToInterpolatedAnchors(px, x.toFloat(), y.toFloat(), anchors)
+                                } else {
+                                    rgbDistance(px, medoid.r, medoid.g, medoid.b)
+                                }
+                                val t = ((dist - 18f) / 48f).coerceIn(0f, 1f).pow(0.72f)
+                                val r = (bgR + (fgR - bgR) * t).toInt().coerceIn(0, 255)
+                                val g = (bgG + (fgG - bgG) * t).toInt().coerceIn(0, 255)
+                                val b = (bgB + (fgB - bgB) * t).toInt().coerceIn(0, 255)
+                                pixels[idx] = Color.argb(a, r, g, b)
+                            }
                         }
-                        val dist = rgbDistance(px, shellR, shellG, shellB)
-                        val t = ((dist - 22f) / 68f).coerceIn(0f, 1f).pow(0.75f)
-                        val r = (bgR + (fgR - bgR) * t).toInt().coerceIn(0, 255)
-                        val g = (bgG + (fgG - bgG) * t).toInt().coerceIn(0, 255)
-                        val b = (bgB + (fgB - bgB) * t).toInt().coerceIn(0, 255)
-                        pixels[i] = Color.argb(a, r, g, b)
+                        out.setPixels(pixels, 0, w, 0, 0, w, h)
+                        return out
                     }
-                    out.setPixels(pixels, 0, w, 0, 0, w, h)
-                    return out
                 }
             }
         }
 
         // Compact single-tone glyph silhouette: tint cleanly to Nothing crisp white
-        if (coverage < 0.34f && stdDev < 16.0 && (maxLum - minLum) < 48f) {
+        if (coverage < 0.36f && stdDev < 18.0 && (maxLum - minLum) < 52f) {
             for (i in pixels.indices) {
                 val a = Color.alpha(pixels[i])
                 pixels[i] = if (a < 16) 0 else Color.argb(a, fgR, fgG, fgB)
@@ -1173,8 +1191,8 @@ class BaseIconPackManager(private val context: Context) {
         }
 
         // Compact multi-color foreground emblem/logo (e.g. Chrome wheel, Brave lion, Kite):
-        // Keep all colored logo strokes bright [0.64f..1.0f] so no colored segment turns muddy dark grey.
-        val baseFloor = if (coverage < 0.34f) 0.64f else 0.42f
+        // Keep all colored logo strokes bright [0.74f..1.0f] so no colored segment turns muddy dark grey.
+        val baseFloor = if (coverage < 0.36f) 0.74f else 0.52f
         val lumSpan = (maxLum - minLum).coerceAtLeast(32f)
 
         for (i in pixels.indices) {
@@ -1197,14 +1215,13 @@ class BaseIconPackManager(private val context: Context) {
     }
 
     /**
-     * Converts a full icon bitmap to Nothing OS dark matte circle + crisp white glyph style:
-     * - Samples the outer container ring (radii 33% and 39% of width) to find the medoid dominant
-     *   container color `(domR, domG, domB)`.
-     * - When a uniform or near-uniform container color surrounds a contrasting central emblem
-     *   (white, red, orange, blue, green, yellow, purple, or dark backgrounds), collapses the
-     *   container color to `#17181A` and boosts the contrasting logo/emblem to `#F1F3F5`.
-     * - For gradient/multi-tone containers, applies high-contrast Nothing dark-surface mapping.
-     * - Applies `systemMaskBitmap` (`DST_IN`) so corners always match Nothing OS's circle mask.
+     * Converts a full icon bitmap to Nothing OS matte dark circle + crisp white glyph style:
+     * - Finds the opaque bounding box and samples 16 angular container anchors inside it.
+     * - Handles BOTH solid container colors AND smooth gradients (e.g. IconCraft, JioHotstar, Brave)
+     *   via inverse-distance weighted ring-background subtraction -> container becomes `#1E1F22` and
+     *   contrasting central logo/symbol becomes `#F3F4F6`.
+     * - Scales centered monochrome content nicely (`0.86f`) inside `#1E1F22` so legacy/square icons
+     *   never kiss the circle edge, then masks cleanly with `systemMaskBitmap`.
      */
     private fun renderFullBitmapAsNothingMonochrome(
         src: Bitmap,
@@ -1222,58 +1239,83 @@ class BaseIconPackManager(private val context: Context) {
         val pixels = IntArray(w * h)
         scaled.getPixels(pixels, 0, w, 0, 0, w, h)
 
-        val cx = w / 2f
-        val cy = h / 2f
-        val ringSamples = ArrayList<Int>(32)
-        for (radiusFactor in floatArrayOf(0.33f, 0.39f)) {
-            val r = w * radiusFactor
-            for (i in 0 until 16) {
-                val angle = i * (Math.PI / 8.0)
-                val x = (cx + r * cos(angle)).toInt().coerceIn(0, w - 1)
-                val y = (cy + r * sin(angle)).toInt().coerceIn(0, h - 1)
-                val px = pixels[y * w + x]
-                if (Color.alpha(px) > 100) {
-                    ringSamples.add(px)
+        var minX = w
+        var maxX = -1
+        var minY = h
+        var maxY = -1
+        for (y in 0 until h) {
+            val rowOffset = y * w
+            for (x in 0 until w) {
+                if (Color.alpha(pixels[rowOffset + x]) > 60) {
+                    if (x < minX) minX = x
+                    if (x > maxX) maxX = x
+                    if (y < minY) minY = y
+                    if (y > maxY) maxY = y
                 }
             }
         }
+        val bw = if (maxX > minX) (maxX - minX + 1).toFloat() else w.toFloat()
+        val bh = if (maxY > minY) (maxY - minY + 1).toFloat() else h.toFloat()
+        val cx = if (maxX > minX) (minX + maxX) / 2f else w / 2f
+        val cy = if (maxY > minY) (minY + maxY) / 2f else h / 2f
 
-        val (domR, domG, domB, ringMatchFraction) = if (ringSamples.isNotEmpty()) {
-            findMedoidRgb(ringSamples, tolerance = 42f)
+        val anchors = collectRingAnchors(
+            pixels = pixels,
+            w = w,
+            h = h,
+            cx = cx,
+            cy = cy,
+            rxPrimary = bw * 0.37f,
+            ryPrimary = bh * 0.37f,
+            rxSecondary = bw * 0.31f,
+            rySecondary = bh * 0.31f
+        )
+
+        val anchorColors = anchors.map { it.argb }
+        val medoid = if (anchorColors.isNotEmpty()) {
+            findMedoidRgb(anchorColors, tolerance = 42f)
         } else {
             MedoidResult(0f, 0f, 0f, 0f)
         }
+        val adjDist = meanAdjacentAnchorDistance(anchors)
+        val useIdw = medoid.matchFraction < 0.72f
 
         var centerOpaque = 0
         var centerContrastCount = 0
         var centerLumSum = 0f
-        val centerBox = (w * 0.24f).toInt().coerceAtLeast(4)
-        for (y in (h / 2 - centerBox)..(h / 2 + centerBox) step 2) {
+        val cBoxX = (bw * 0.24f).toInt().coerceAtLeast(4)
+        val cBoxY = (bh * 0.24f).toInt().coerceAtLeast(4)
+        val cyi = cy.toInt()
+        val cxi = cx.toInt()
+        for (y in (cyi - cBoxY)..(cyi + cBoxY) step 2) {
             if (y !in 0 until h) continue
-            for (x in (w / 2 - centerBox)..(w / 2 + centerBox) step 2) {
+            for (x in (cxi - cBoxX)..(cxi + cBoxX) step 2) {
                 if (x !in 0 until w) continue
                 val px = pixels[y * w + x]
                 if (Color.alpha(px) > 100) {
                     centerOpaque++
                     centerLumSum += (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px))
-                    if (rgbDistance(px, domR, domG, domB) > 36f) {
-                        centerContrastCount++
+                    val dist = if (useIdw && anchors.isNotEmpty()) {
+                        distanceToInterpolatedAnchors(px, x.toFloat(), y.toFloat(), anchors)
+                    } else {
+                        rgbDistance(px, medoid.r, medoid.g, medoid.b)
                     }
+                    if (dist > 34f) centerContrastCount++
                 }
             }
         }
         val centerContrastRatio = if (centerOpaque > 0) centerContrastCount.toFloat() / centerOpaque else 0f
         val centerMeanLum = if (centerOpaque > 0) centerLumSum / centerOpaque else 128f
-        val ringMeanLum = if (ringSamples.isNotEmpty()) {
-            ringSamples.map { 0.299f * Color.red(it) + 0.587f * Color.green(it) + 0.114f * Color.blue(it) }.average().toFloat()
+        val ringMeanLum = if (anchorColors.isNotEmpty()) {
+            anchorColors.map { 0.299f * Color.red(it) + 0.587f * Color.green(it) + 0.114f * Color.blue(it) }.average().toFloat()
         } else {
             0f
         }
 
         val useContainerDistanceSegmentation =
-            ringSamples.size >= 10 && ringMatchFraction >= 0.45f && centerContrastRatio >= 0.04f
+            anchors.size >= 10 && (medoid.matchFraction >= 0.45f || adjDist <= 52f) && centerContrastRatio >= 0.035f
         val invertLuminance = !useContainerDistanceSegmentation &&
-            ringMeanLum > 165f && centerMeanLum < (ringMeanLum - 16f)
+            ringMeanLum > 160f && centerMeanLum < (ringMeanLum - 14f)
 
         val bgR = Color.red(NOTHING_BG_COLOR)
         val bgG = Color.green(NOTHING_BG_COLOR)
@@ -1283,29 +1325,165 @@ class BaseIconPackManager(private val context: Context) {
         val fgB = Color.blue(NOTHING_FG_COLOR)
 
         val monoBmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        for (i in pixels.indices) {
-            val px = pixels[i]
-            val a = Color.alpha(px)
-            if (a < 16) {
-                pixels[i] = NOTHING_BG_COLOR
-                continue
+        for (y in 0 until h) {
+            val rowOffset = y * w
+            for (x in 0 until w) {
+                val idx = rowOffset + x
+                val px = pixels[idx]
+                val a = Color.alpha(px)
+                if (a < 16) {
+                    pixels[idx] = NOTHING_BG_COLOR
+                    continue
+                }
+                val t = if (useContainerDistanceSegmentation) {
+                    val dist = if (useIdw) {
+                        distanceToInterpolatedAnchors(px, x.toFloat(), y.toFloat(), anchors)
+                    } else {
+                        rgbDistance(px, medoid.r, medoid.g, medoid.b)
+                    }
+                    ((dist - 18f) / 48f).coerceIn(0f, 1f).pow(0.72f)
+                } else {
+                    val rawLum = (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px)) / 255f
+                    val baseT = if (invertLuminance) (1f - rawLum) else rawLum
+                    baseT.coerceIn(0f, 1f).pow(1.25f)
+                }
+                val r = (bgR + (fgR - bgR) * t).toInt().coerceIn(0, 255)
+                val g = (bgG + (fgG - bgG) * t).toInt().coerceIn(0, 255)
+                val b = (bgB + (fgB - bgB) * t).toInt().coerceIn(0, 255)
+                pixels[idx] = Color.argb(255, r, g, b)
             }
-            val t = if (useContainerDistanceSegmentation) {
-                val dist = rgbDistance(px, domR, domG, domB)
-                ((dist - 20f) / 68f).coerceIn(0f, 1f).pow(0.76f)
-            } else {
-                val rawLum = (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px)) / 255f
-                val baseT = if (invertLuminance) (1f - rawLum) else rawLum
-                baseT.coerceIn(0f, 1f).pow(1.30f)
-            }
-            val r = (bgR + (fgR - bgR) * t).toInt().coerceIn(0, 255)
-            val g = (bgG + (fgG - bgG) * t).toInt().coerceIn(0, 255)
-            val b = (bgB + (fgB - bgB) * t).toInt().coerceIn(0, 255)
-            pixels[i] = Color.argb(255, r, g, b)
         }
         monoBmp.setPixels(pixels, 0, w, 0, 0, w, h)
 
-        return applySystemMask(monoBmp, systemMaskBitmap, targetSize)
+        return applySystemMaskWithPadding(monoBmp, systemMaskBitmap, targetSize, innerScale = 0.88f)
+    }
+
+    private data class RingAnchor(
+        val x: Float,
+        val y: Float,
+        val argb: Int
+    )
+
+    private fun collectRingAnchors(
+        pixels: IntArray,
+        w: Int,
+        h: Int,
+        cx: Float,
+        cy: Float,
+        rxPrimary: Float,
+        ryPrimary: Float,
+        rxSecondary: Float,
+        rySecondary: Float
+    ): List<RingAnchor> {
+        val out = ArrayList<RingAnchor>(16)
+        for (i in 0 until 16) {
+            val angle = i * (Math.PI / 8.0)
+            val cosA = cos(angle).toFloat()
+            val sinA = sin(angle).toFloat()
+            val x1 = (cx + rxPrimary * cosA).toInt().coerceIn(0, w - 1)
+            val y1 = (cy + ryPrimary * sinA).toInt().coerceIn(0, h - 1)
+            val px1 = pixels[y1 * w + x1]
+            if (Color.alpha(px1) > 110) {
+                out.add(RingAnchor(x1.toFloat(), y1.toFloat(), px1))
+            } else {
+                val x2 = (cx + rxSecondary * cosA).toInt().coerceIn(0, w - 1)
+                val y2 = (cy + rySecondary * sinA).toInt().coerceIn(0, h - 1)
+                val px2 = pixels[y2 * w + x2]
+                if (Color.alpha(px2) > 110) {
+                    out.add(RingAnchor(x2.toFloat(), y2.toFloat(), px2))
+                }
+            }
+        }
+        return out
+    }
+
+    private fun meanAdjacentAnchorDistance(anchors: List<RingAnchor>): Float {
+        if (anchors.size < 2) return 0f
+        var sum = 0f
+        for (i in anchors.indices) {
+            val a = anchors[i]
+            val b = anchors[(i + 1) % anchors.size]
+            sum += rgbDistance(a.argb, Color.red(b.argb).toFloat(), Color.green(b.argb).toFloat(), Color.blue(b.argb).toFloat())
+        }
+        return sum / anchors.size
+    }
+
+    private fun distanceToInterpolatedAnchors(px: Int, x: Float, y: Float, anchors: List<RingAnchor>): Float {
+        var wSum = 0f
+        var rSum = 0f
+        var gSum = 0f
+        var bSum = 0f
+        for (anchor in anchors) {
+            val dx = x - anchor.x
+            val dy = y - anchor.y
+            val distSq = dx * dx + dy * dy + 64f
+            val weight = 1f / distSq
+            wSum += weight
+            rSum += Color.red(anchor.argb) * weight
+            gSum += Color.green(anchor.argb) * weight
+            bSum += Color.blue(anchor.argb) * weight
+        }
+        val denom = wSum.coerceAtLeast(1e-6f)
+        return rgbDistance(px, rSum / denom, gSum / denom, bSum / denom)
+    }
+
+    private fun hasTransparentCenterCutout(bmp: Bitmap): Boolean {
+        val w = bmp.width
+        val h = bmp.height
+        val cx = w / 2
+        val cy = h / 2
+        val box = (w * 0.22f).toInt().coerceAtLeast(4)
+        var transparentCenter = 0
+        var totalCenter = 0
+        for (y in (cy - box)..(cy + box) step 2) {
+            for (x in (cx - box)..(cx + box) step 2) {
+                totalCenter++
+                if (Color.alpha(bmp.getPixel(x, y)) < 40) transparentCenter++
+            }
+        }
+        return totalCenter > 0 && (transparentCenter.toFloat() / totalCenter) > 0.12f
+    }
+
+    private fun invertStencilCutoutOnNothingSurface(
+        src: Bitmap,
+        systemMaskBitmap: Bitmap,
+        targetSize: Int
+    ): Bitmap {
+        val w = src.width
+        val h = src.height
+        val pixels = IntArray(w * h)
+        src.getPixels(pixels, 0, w, 0, 0, w, h)
+        for (i in pixels.indices) {
+            val a = Color.alpha(pixels[i])
+            pixels[i] = if (a < 40) NOTHING_FG_COLOR else NOTHING_BG_COLOR
+        }
+        val inverted = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        inverted.setPixels(pixels, 0, w, 0, 0, w, h)
+        return applySystemMaskWithPadding(inverted, systemMaskBitmap, targetSize, innerScale = 0.88f)
+    }
+
+    private fun applySystemMaskWithPadding(
+        src: Bitmap,
+        systemMaskBitmap: Bitmap,
+        targetSize: Int,
+        innerScale: Float
+    ): Bitmap {
+        val out = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        canvas.drawColor(NOTHING_BG_COLOR)
+        val box = targetSize * innerScale
+        val offset = (targetSize - box) / 2f
+        canvas.drawBitmap(
+            src,
+            null,
+            RectF(offset, offset, offset + box, offset + box),
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        )
+        val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+        }
+        canvas.drawBitmap(systemMaskBitmap, 0f, 0f, maskPaint)
+        return out
     }
 
     private data class MedoidResult(
@@ -1527,8 +1705,8 @@ class BaseIconPackManager(private val context: Context) {
         const val ICONCRAFT_PACK_PKG = "com.iconcraft.pack"
         const val NOTHING_ICON_PACK_PKG = "com.nothing.icon"
         const val NOTHING_BUILTIN_PKG = "builtin.nothing.monochrome"
-        private const val NOTHING_BG_COLOR = 0xFF17181A.toInt()
-        private const val NOTHING_FG_COLOR = 0xFFF1F3F5.toInt()
+        private const val NOTHING_BG_COLOR = 0xFF1E1F22.toInt()
+        private const val NOTHING_FG_COLOR = 0xFFF3F4F6.toInt()
         private const val PREFS_NAME = "iconcraft_base_pack_prefs"
         private const val KEY_BASE_PACK_PKG = "selected_base_pack_package"
 
