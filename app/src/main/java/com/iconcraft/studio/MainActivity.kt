@@ -40,6 +40,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -53,6 +54,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.iconcraft.studio.apk.ApkPatcherAndSigner
 import com.iconcraft.studio.apk.BaseIconPackManager
+import com.iconcraft.studio.apk.InstalledIconCraftPackStatus
 import com.iconcraft.studio.apk.InstalledIconPack
 import com.iconcraft.studio.apk.LauncherInspector
 import com.iconcraft.studio.apk.LocalKeystoreManager
@@ -134,6 +139,7 @@ private fun IconCraftApp(
     var selectedBasePackPackage by remember {
         mutableStateOf(basePackManager.getSelectedBasePackPackage())
     }
+    var installedPackStatus by remember { mutableStateOf(InstalledIconCraftPackStatus()) }
 
     val queueItems = remember { mutableStateListOf<CustomIconQueueItem>() }
     var currentScreen by remember { mutableStateOf(ActiveScreen.HOME_QUEUE) }
@@ -185,6 +191,23 @@ private fun IconCraftApp(
         }
     }
 
+    @Suppress("DEPRECATION")
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && !isLoadingApps) {
+                scope.launch {
+                    installedPackStatus = basePackManager.inspectInstalledIconCraftPack()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     LaunchedEffect(Unit) {
         // Ensure persistent RSA-2048 PKCS#12 (.p12) keystore is created on first launch
         withContext(Dispatchers.IO) {
@@ -200,6 +223,30 @@ private fun IconCraftApp(
         val loadedApps = repository.loadLaunchableApps()
         installedApps = loadedApps
         val savedQueue = queueStorage.loadQueue(loadedApps)
+        val packStatus = basePackManager.inspectInstalledIconCraftPack()
+        installedPackStatus = packStatus
+
+        if (savedQueue.isEmpty() && packStatus.isInstalled && packStatus.customIconCount > 0) {
+            val fetched = basePackManager.fetchInstalledIconCraftPack(
+                installedApps = loadedApps,
+                existingQueueItems = emptyList(),
+                queueStorage = queueStorage,
+                installedIconPacks = loadedPacks
+            )
+            if (fetched != null && fetched.mergedQueueItems.isNotEmpty()) {
+                queueItems.clear()
+                queueItems.addAll(fetched.mergedQueueItems)
+                if (fetched.restoredBasePackPackage != null) {
+                    selectedBasePackPackage = fetched.restoredBasePackPackage
+                }
+                isLoadingApps = false
+                snackbarHostState.showSnackbar(
+                    "Found active IconCraft Pack (${fetched.newlyImportedCount} icons) — automatically retained into Queue"
+                )
+                return@LaunchedEffect
+            }
+        }
+
         queueItems.clear()
         queueItems.addAll(savedQueue)
         isLoadingApps = false
@@ -334,6 +381,36 @@ private fun IconCraftApp(
                         selectedBasePackPackage = pkg
                         basePackManager.setSelectedBasePackPackage(pkg)
                     },
+                    installedPackStatus = installedPackStatus,
+                    onFetchCurrentPackClick = {
+                        scope.launch {
+                            val fetched = basePackManager.fetchInstalledIconCraftPack(
+                                installedApps = installedApps,
+                                existingQueueItems = queueItems.toList(),
+                                queueStorage = queueStorage,
+                                installedIconPacks = installedIconPacks
+                            )
+                            if (fetched == null) {
+                                snackbarHostState.showSnackbar(
+                                    "IconCraft Pack (com.iconcraft.pack) is not installed yet."
+                                )
+                            } else {
+                                queueItems.clear()
+                                queueItems.addAll(fetched.mergedQueueItems)
+                                if (fetched.restoredBasePackPackage != null) {
+                                    selectedBasePackPackage = fetched.restoredBasePackPackage
+                                }
+                                installedPackStatus = basePackManager.inspectInstalledIconCraftPack()
+                                CustomIconWidgetProvider.refreshAllWidgets(context)
+                                val msg = if (fetched.newlyImportedCount > 0) {
+                                    "Retained ${fetched.newlyImportedCount} custom icon(s) from installed IconCraft Pack into Queue"
+                                } else {
+                                    "All ${fetched.mergedQueueItems.size} active icon(s) from IconCraft Pack are already in your Queue"
+                                }
+                                snackbarHostState.showSnackbar(msg)
+                            }
+                        }
+                    },
                     labInspirationBitmap = labInspirationBitmap,
                     snackbarHostState = snackbarHostState,
                     onCustomizeAppClick = {
@@ -394,6 +471,8 @@ private fun IconCraftApp(
                                     inMemoryPngBytesByFilename = mergedPayload.inMemoryPngBytesByFilename,
                                     inheritedBaseCount = mergedPayload.inheritedBaseCount,
                                     basePackLabel = mergedPayload.basePackLabel,
+                                    basePackPackage = mergedPayload.basePackPackage,
+                                    customComponents = mergedPayload.customComponents,
                                     onProgress = { msg -> buildStepMessage = msg }
                                 )
                                 isBuildingApk = false
@@ -420,7 +499,7 @@ private fun IconCraftApp(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
-                    onBatchExportLabPack = { inspiration, palette, style, invertVariant, preserveSelective ->
+                    onBatchExportLabPack = { inspiration, palette, style, invertVariant, preserveSelective, syncToSelectiveQueue ->
                         if (!isBuildingApk && installedApps.isNotEmpty()) {
                             isBuildingApk = true
                             buildStepMessage = "Preparing procedural batch export..."
@@ -464,23 +543,45 @@ private fun IconCraftApp(
                                                 outputSize = 512,
                                                 invertSilhouette = invertVariant
                                             )
-                                            val outFile = File(labDir, "lab_icon_%03d.png".format(slot))
-                                            FileOutputStream(outFile).use { fos ->
-                                                rendered512.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                                            val savedFile = if (syncToSelectiveQueue) {
+                                                queueStorage.saveCustomIconBitmap(slot, rendered512)
+                                            } else {
+                                                val outFile = File(labDir, "lab_icon_%03d.png".format(slot))
+                                                FileOutputStream(outFile).use { fos ->
+                                                    rendered512.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                                                }
+                                                outFile
                                             }
+                                            val savedSourceFile = if (syncToSelectiveQueue) {
+                                                queueStorage.saveSourceBitmap(slot, rendered512)
+                                            } else null
+
                                             outList.add(
                                                 CustomIconQueueItem(
                                                     app = app,
                                                     slotIndex = slot,
-                                                    customPngPath = outFile.absolutePath
+                                                    customPngPath = savedFile.absolutePath,
+                                                    sourcePngPath = savedSourceFile?.absolutePath,
+                                                    customPreviewBitmap = rendered512.asImageBitmap(),
+                                                    shapeMaskName = "FULL_BLEED",
+                                                    imageScale = 1.0f,
+                                                    roundInnerCorners = false,
+                                                    backgroundColorArgb = 0
                                                 )
                                             )
                                         }
                                         outList
                                     }
 
+                                    if (syncToSelectiveQueue) {
+                                        queueItems.clear()
+                                        queueItems.addAll(batchQueue)
+                                        queueStorage.saveQueue(batchQueue)
+                                    }
+
                                     apkPatcherAndSigner.buildAndSignIconPack(
                                         queueItems = batchQueue,
+                                        customComponents = batchQueue.map { it.app.componentInfo },
                                         onProgress = { msg -> buildStepMessage = msg }
                                     ).getOrThrow()
                                 }

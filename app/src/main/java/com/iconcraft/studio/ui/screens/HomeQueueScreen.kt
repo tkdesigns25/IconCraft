@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -72,6 +73,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.iconcraft.studio.apk.InstalledIconCraftPackStatus
 import com.iconcraft.studio.apk.InstalledIconPack
 import com.iconcraft.studio.lab.ExtractedThemePalette
 import com.iconcraft.studio.lab.ProceduralStyle
@@ -94,6 +96,8 @@ fun HomeQueueScreen(
     installedIconPacks: List<InstalledIconPack> = emptyList(),
     selectedBasePackPackage: String? = null,
     onSelectBasePack: (String?) -> Unit = {},
+    installedPackStatus: InstalledIconCraftPackStatus = InstalledIconCraftPackStatus(),
+    onFetchCurrentPackClick: () -> Unit = {},
     labInspirationBitmap: Bitmap? = null,
     snackbarHostState: SnackbarHostState,
     onCustomizeAppClick: () -> Unit,
@@ -107,8 +111,9 @@ fun HomeQueueScreen(
         palette: ExtractedThemePalette,
         style: ProceduralStyle,
         invertVariant: Boolean,
-        preserveSelectiveQueue: Boolean
-    ) -> Unit = { _, _, _, _, _ -> },
+        preserveSelectiveQueue: Boolean,
+        syncToSelectiveQueue: Boolean
+    ) -> Unit = { _, _, _, _, _, _ -> },
     onInspectLauncherClick: () -> Unit = {}
 ) {
     // 0 = Selective Studio (Default), 1 = Experimental Lab ("Auto-Theme Pack from 1 Image")
@@ -119,6 +124,14 @@ fun HomeQueueScreen(
         installedIconPacks.firstOrNull { it.packageName == selectedBasePackPackage }
     }
     val canBuild = queueItems.isNotEmpty() || selectedBasePack != null
+    val unretainedCount = remember(installedPackStatus, queueItems.size) {
+        if (!installedPackStatus.isInstalled || installedPackStatus.customComponents.isEmpty()) {
+            0
+        } else {
+            val queuedIds = queueItems.map { it.app.componentInfo }.toSet()
+            installedPackStatus.customComponents.count { it !in queuedIds }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -272,6 +285,16 @@ fun HomeQueueScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
+                    if (installedPackStatus.isInstalled && installedPackStatus.customIconCount > 0) {
+                        item {
+                            InstalledPackRetainBanner(
+                                totalInstalledCustomCount = installedPackStatus.customIconCount,
+                                unretainedCount = unretainedCount,
+                                onRetainClick = onFetchCurrentPackClick
+                            )
+                        }
+                    }
+
                     item {
                         BaseIconPackSelectorCard(
                             selectedBasePack = selectedBasePack,
@@ -355,6 +378,29 @@ fun HomeQueueScreen(
                                         )
                                     )
                                 }
+
+                                if (installedPackStatus.isInstalled) {
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    OutlinedButton(
+                                        onClick = onFetchCurrentPackClick,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(46.dp),
+                                        shape = RoundedCornerShape(14.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.SystemUpdateAlt,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                            tint = EmeraldAccent
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Fetch Current Pack (${installedPackStatus.customIconCount} icons)",
+                                            style = MaterialTheme.typography.labelLarge
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -374,12 +420,54 @@ fun HomeQueueScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    if (installedPackStatus.isInstalled && unretainedCount > 0) {
+                        item {
+                            InstalledPackRetainBanner(
+                                totalInstalledCustomCount = installedPackStatus.customIconCount,
+                                unretainedCount = unretainedCount,
+                                onRetainClick = onFetchCurrentPackClick
+                            )
+                        }
+                    }
+
                     item {
                         BaseIconPackSelectorCard(
                             selectedBasePack = selectedBasePack,
                             installedPackCount = installedIconPacks.size,
                             onClick = { showBasePackDialog = true }
                         )
+                    }
+
+                    if (installedPackStatus.isInstalled) {
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Custom Queue (${queueItems.size} active)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                TextButton(onClick = onFetchCurrentPackClick) {
+                                    Icon(
+                                        imageVector = Icons.Default.SystemUpdateAlt,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = EmeraldAccent
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Fetch Current Pack",
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            color = EmeraldAccent,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     items(
@@ -432,6 +520,76 @@ fun HomeQueueScreen(
             },
             onDismiss = { showBasePackDialog = false }
         )
+    }
+}
+
+@Composable
+private fun InstalledPackRetainBanner(
+    totalInstalledCustomCount: Int,
+    unretainedCount: Int,
+    onRetainClick: () -> Unit
+) {
+    val countToDisplay = if (unretainedCount > 0) unretainedCount else totalInstalledCustomCount
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = EmeraldAccent.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .clickable(onClick = onRetainClick),
+        color = SlateSurface,
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(EmeraldAccent.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SystemUpdateAlt,
+                    contentDescription = null,
+                    tint = EmeraldAccent,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Found active IconCraft Pack ($countToDisplay ${if (countToDisplay == 1) "icon" else "icons"}) — Retain into Queue",
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = EmeraldAccent
+                    )
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Tap to fetch your installed custom icons so you can add or edit 1 app without re-uploading.",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            FilledTonalButton(
+                onClick = onRetainClick,
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("Retain", fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 

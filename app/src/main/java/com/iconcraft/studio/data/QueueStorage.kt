@@ -16,7 +16,8 @@ import java.io.FileOutputStream
 class QueueStorage(private val context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    private val iconsDir = File(context.filesDir, "custom_icons").apply { mkdirs() }
+    private val iconsDir = File(context.filesDir, "queue_icons").apply { mkdirs() }
+    private val legacyIconsDir = File(context.filesDir, "custom_icons")
     private val sourcesDir = File(context.filesDir, "source_icons").apply { mkdirs() }
 
     suspend fun saveCustomIconBitmap(slotIndex: Int, bitmap: Bitmap): File = withContext(Dispatchers.IO) {
@@ -79,7 +80,7 @@ class QueueStorage(private val context: Context) {
                 val packageName = obj.optString("packageName")
                 val activityName = obj.optString("activityName")
                 val slotIndex = obj.optInt("slotIndex", i + 1)
-                val customPngPath = obj.optString("customPngPath").takeIf { it.isNotEmpty() }
+                val rawCustomPngPath = obj.optString("customPngPath").takeIf { it.isNotEmpty() }
                 val sourcePngPath = obj.optString("sourcePngPath").takeIf { it.isNotEmpty() }
                 val shapeMaskName = obj.optString("shapeMaskName", "ROUNDED_SQUARE")
                 val imageScale = obj.optDouble("imageScale", 1.0).toFloat()
@@ -88,6 +89,9 @@ class QueueStorage(private val context: Context) {
                 val userZoom = obj.optDouble("userZoom", 1.0).toFloat()
                 val userPanX = obj.optDouble("userPanX", 0.0).toFloat()
                 val userPanY = obj.optDouble("userPanY", 0.0).toFloat()
+
+                val resolvedPngFile = resolveCustomPngFile(slotIndex, rawCustomPngPath)
+                val resolvedCustomPngPath = resolvedPngFile?.absolutePath ?: rawCustomPngPath
 
                 val compKey = "ComponentInfo{$packageName/$activityName}"
                 val app = byComponent[compKey] ?: InstalledApp(
@@ -98,16 +102,14 @@ class QueueStorage(private val context: Context) {
                     iconImageBitmap = null
                 )
 
-                val previewBitmap = customPngPath
-                    ?.let { File(it) }
-                    ?.takeIf { it.exists() }
+                val previewBitmap = resolvedPngFile
                     ?.let { BitmapFactory.decodeFile(it.absolutePath)?.asImageBitmap() }
 
                 result.add(
                     CustomIconQueueItem(
                         app = app,
                         slotIndex = slotIndex,
-                        customPngPath = customPngPath,
+                        customPngPath = resolvedCustomPngPath,
                         sourcePngPath = sourcePngPath,
                         customPreviewBitmap = previewBitmap,
                         shapeMaskName = shapeMaskName,
@@ -122,6 +124,28 @@ class QueueStorage(private val context: Context) {
             }
         }
         result
+    }
+
+    private fun resolveCustomPngFile(slotIndex: Int, savedPath: String?): File? {
+        if (!savedPath.isNullOrBlank()) {
+            val direct = File(savedPath)
+            if (direct.exists()) return direct
+        }
+        val slotFileName = "custom_icon_%03d.png".format(slotIndex)
+        val inQueueIcons = File(iconsDir, slotFileName)
+        if (inQueueIcons.exists()) return inQueueIcons
+
+        val inLegacyIcons = File(legacyIconsDir, slotFileName)
+        if (inLegacyIcons.exists()) {
+            // Migrate legacy file into queue_icons/
+            runCatching {
+                iconsDir.mkdirs()
+                inLegacyIcons.copyTo(inQueueIcons, overwrite = true)
+                return inQueueIcons
+            }
+            return inLegacyIcons
+        }
+        return null
     }
 
     companion object {

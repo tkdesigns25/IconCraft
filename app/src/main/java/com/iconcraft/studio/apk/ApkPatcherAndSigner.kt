@@ -19,13 +19,18 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
+data class IconCraftPackMetadata(
+    val basePackPackage: String?,
+    val customComponents: List<String>
+)
+
 /**
  * Patches `assets/template_iconpack.apk` with the user's selective custom icons,
  * encodes both plain-text UTF-8 XML (`assets/`, `res/raw/`) and compiled Android
- * Binary XML (`res/xml/`), increments `versionCode`, aligns uncompressed entries
- * to 4-byte boundaries (required by Android 11+ `targetSdk 35`), and signs the
- * output APK on-device using Google's `ApkSigner` (v1 + v2 + v3) with the persistent
- * local `.p12` keystore.
+ * Binary XML (`res/xml/`), embeds `assets/iconcraft_meta.json`, increments `versionCode`,
+ * aligns uncompressed entries to 4-byte boundaries (required by Android 11+ `targetSdk 35`),
+ * and signs the output APK on-device using Google's `ApkSigner` (v1 + v2 + v3) with the
+ * persistent local `.p12` keystore.
  */
 class ApkPatcherAndSigner(private val context: Context) {
 
@@ -46,6 +51,8 @@ class ApkPatcherAndSigner(private val context: Context) {
         inMemoryPngBytesByFilename: Map<String, ByteArray> = emptyMap(),
         inheritedBaseCount: Int = 0,
         basePackLabel: String? = null,
+        basePackPackage: String? = null,
+        customComponents: List<String>? = null,
         onProgress: (String) -> Unit = {}
     ): Result<BuildResult> = withContext(Dispatchers.IO) {
         runCatching {
@@ -61,6 +68,13 @@ class ApkPatcherAndSigner(private val context: Context) {
             val drawablePlain = AxmlEncoder.encodeDrawablePlainXml(queueItems)
             val appFilterAxml = AxmlEncoder.encodeAppFilterAxml(queueItems, appFilterExtras)
             val drawableAxml = AxmlEncoder.encodeDrawableAxml(queueItems)
+
+            val effectiveCustomComponents = customComponents
+                ?: queueItems.filter { it.customPngPath != null }.map { it.app.componentInfo }
+            val metaJsonBytes = encodeMetaJson(
+                basePackPackage = basePackPackage?.takeIf { it.isNotBlank() },
+                customComponents = effectiveCustomComponents
+            )
 
             // Map drawable slot names ("custom_icon_001.png") to custom or inherited PNG bytes
             val customPngBytesByFilename = HashMap<String, ByteArray>(inMemoryPngBytesByFilename)
@@ -98,7 +112,8 @@ class ApkPatcherAndSigner(private val context: Context) {
                 "res/xml/appfilter.xml" to appFilterAxml,
                 "assets/drawable.xml" to drawablePlain,
                 "res/raw/drawable.xml" to drawablePlain,
-                "res/xml/drawable.xml" to drawableAxml
+                "res/xml/drawable.xml" to drawableAxml,
+                META_ASSET_PATH to metaJsonBytes
             )
 
             val writtenNames = HashSet<String>()
@@ -153,7 +168,7 @@ class ApkPatcherAndSigner(private val context: Context) {
                                 entry = zis.nextEntry
                             }
 
-                            // Ensure all 6 mapping XML files exist even if any were absent from template
+                            // Ensure all mapping XML files and iconcraft_meta.json exist even if absent from template
                             for ((targetName, xmlBytes) in replacementEntries) {
                                 if (writtenNames.add(targetName)) {
                                     writeZipEntry(
@@ -306,7 +321,100 @@ class ApkPatcherAndSigner(private val context: Context) {
     }
 
     companion object {
+        const val META_ASSET_PATH = "assets/iconcraft_meta.json"
         private const val PREFS_NAME = "iconcraft_build_prefs"
         private const val KEY_VERSION_CODE = "pack_version_code"
+
+        fun encodeMetaJson(
+            basePackPackage: String?,
+            customComponents: List<String>
+        ): ByteArray {
+            val sb = StringBuilder()
+            sb.append("{\n")
+            sb.append("  \"basePackPackage\": ")
+            if (basePackPackage.isNullOrBlank()) {
+                sb.append("null")
+            } else {
+                sb.append("\"").append(escapeJsonString(basePackPackage)).append("\"")
+            }
+            sb.append(",\n")
+            sb.append("  \"customComponents\": [")
+            if (customComponents.isNotEmpty()) {
+                sb.append("\n")
+                customComponents.forEachIndexed { idx, comp ->
+                    sb.append("    \"").append(escapeJsonString(comp)).append("\"")
+                    if (idx < customComponents.lastIndex) sb.append(",")
+                    sb.append("\n")
+                }
+                sb.append("  ")
+            }
+            sb.append("]\n")
+            sb.append("}\n")
+            return sb.toString().toByteArray(Charsets.UTF_8)
+        }
+
+        fun parseMetaJson(jsonText: String): IconCraftPackMetadata? {
+            if (jsonText.isBlank()) return null
+            val basePackRegex = Regex("\"basePackPackage\"\\s*:\\s*(null|\"((?:\\\\.|[^\"\\\\])*)\")")
+            val baseMatch = basePackRegex.find(jsonText)
+            val basePackPkg = baseMatch?.groups?.get(2)?.value?.let { unescapeJsonString(it) }
+                ?.takeIf { it.isNotBlank() }
+
+            val arrayRegex = Regex("\"customComponents\"\\s*:\\s*\\[(.*?)]", setOf(RegexOption.DOT_MATCHES_ALL))
+            val arrayMatch = arrayRegex.find(jsonText)
+            val components = ArrayList<String>()
+            if (arrayMatch != null) {
+                val inner = arrayMatch.groupValues[1]
+                val itemRegex = Regex("\"((?:\\\\.|[^\"\\\\])*)\"")
+                for (m in itemRegex.findAll(inner)) {
+                    val unescaped = unescapeJsonString(m.groupValues[1]).trim()
+                    if (unescaped.isNotEmpty()) {
+                        components.add(unescaped)
+                    }
+                }
+            }
+            return IconCraftPackMetadata(
+                basePackPackage = basePackPkg,
+                customComponents = components
+            )
+        }
+
+        private fun escapeJsonString(input: String): String {
+            return buildString(input.length + 8) {
+                for (ch in input) {
+                    when (ch) {
+                        '\\' -> append("\\\\")
+                        '"' -> append("\\\"")
+                        '\n' -> append("\\n")
+                        '\r' -> append("\\r")
+                        '\t' -> append("\\t")
+                        else -> append(ch)
+                    }
+                }
+            }
+        }
+
+        private fun unescapeJsonString(input: String): String {
+            val sb = StringBuilder(input.length)
+            var i = 0
+            while (i < input.length) {
+                val ch = input[i]
+                if (ch == '\\' && i + 1 < input.length) {
+                    when (val next = input[i + 1]) {
+                        '\\' -> sb.append('\\')
+                        '"' -> sb.append('"')
+                        'n' -> sb.append('\n')
+                        'r' -> sb.append('\r')
+                        't' -> sb.append('\t')
+                        else -> sb.append(next)
+                    }
+                    i += 2
+                } else {
+                    sb.append(ch)
+                    i += 1
+                }
+            }
+            return sb.toString()
+        }
     }
 }

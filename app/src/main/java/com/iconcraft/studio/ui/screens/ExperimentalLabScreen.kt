@@ -88,7 +88,8 @@ fun ExperimentalLabScreen(
         palette: ExtractedThemePalette,
         style: ProceduralStyle,
         invertVariant: Boolean,
-        preserveSelectiveQueue: Boolean
+        preserveSelectiveQueue: Boolean,
+        syncToSelectiveQueue: Boolean
     ) -> Unit
 ) {
     val context = LocalContext.current
@@ -102,6 +103,7 @@ fun ExperimentalLabScreen(
     var selectedStyle by remember { mutableStateOf(ProceduralStyle.NEON_GLOW) }
     var invertVariant by remember { mutableStateOf(false) }
     var preserveSelectiveQueue by remember { mutableStateOf(true) }
+    var syncToSelectiveQueue by remember { mutableStateOf(true) }
 
     // Select up to 16 real installed apps for the 4x4 live preview grid
     val previewApps = remember(installedApps) {
@@ -516,6 +518,27 @@ fun ExperimentalLabScreen(
                         }
                     }
 
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { syncToSelectiveQueue = !syncToSelectiveQueue }
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Checkbox(
+                            checked = syncToSelectiveQueue,
+                            onCheckedChange = { syncToSelectiveQueue = it },
+                            colors = CheckboxDefaults.colors(checkedColor = EmeraldAccent)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Retain generated icons in Queue (edit any single app later without re-uploading)",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Button(
@@ -525,7 +548,8 @@ fun ExperimentalLabScreen(
                                 palette,
                                 selectedStyle,
                                 invertVariant,
-                                preserveSelectiveQueue
+                                preserveSelectiveQueue,
+                                syncToSelectiveQueue
                             )
                         },
                         enabled = installedApps.isNotEmpty(),

@@ -9,6 +9,7 @@ import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import com.iconcraft.studio.data.QueueStorage
 import com.iconcraft.studio.model.CustomIconQueueItem
 import com.iconcraft.studio.model.InstalledApp
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,20 @@ data class InstalledIconPack(
     val packageName: String,
     val packLabel: String,
     val iconImageBitmap: ImageBitmap? = null
+)
+
+data class InstalledIconCraftPackStatus(
+    val isInstalled: Boolean = false,
+    val customIconCount: Int = 0,
+    val basePackPackage: String? = null,
+    val customComponents: Set<String> = emptySet()
+)
+
+data class FetchedIconCraftPackResult(
+    val mergedQueueItems: List<CustomIconQueueItem>,
+    val newlyImportedCount: Int,
+    val retainedExistingCount: Int,
+    val restoredBasePackPackage: String?
 )
 
 /**
@@ -48,7 +63,9 @@ data class MergedPackPayload(
     val inMemoryPngBytesByFilename: Map<String, ByteArray> = emptyMap(),
     val userCustomizedCount: Int = 0,
     val inheritedBaseCount: Int = 0,
-    val basePackLabel: String? = null
+    val basePackLabel: String? = null,
+    val basePackPackage: String? = null,
+    val customComponents: List<String> = emptyList()
 )
 
 class BaseIconPackManager(private val context: Context) {
@@ -61,6 +78,175 @@ class BaseIconPackManager(private val context: Context) {
 
     fun setSelectedBasePackPackage(packageName: String?) {
         prefs.edit().putString(KEY_BASE_PACK_PKG, packageName ?: "").apply()
+    }
+
+    /**
+     * Inspects whether `com.iconcraft.pack` is currently installed on the device and
+     * counts its active custom icon mappings (reading `assets/iconcraft_meta.json` if present,
+     * or falling back to `appfilter.xml` on older packs).
+     */
+    suspend fun inspectInstalledIconCraftPack(): InstalledIconCraftPackStatus = withContext(Dispatchers.IO) {
+        val pm = context.packageManager
+        val packResources = runCatching {
+            pm.getPackageInfo(ICONCRAFT_PACK_PKG, 0)
+            pm.getResourcesForApplication(ICONCRAFT_PACK_PKG)
+        }.getOrNull() ?: return@withContext InstalledIconCraftPackStatus(isInstalled = false)
+
+        val meta = readInstalledPackMetadata(packResources)
+        val parsedFilter = parseBasePackAppFilter(packResources, ICONCRAFT_PACK_PKG)
+
+        val activeCustomComponents: Set<String> = if (meta != null && meta.customComponents.isNotEmpty()) {
+            val normalizedMeta = meta.customComponents.map { normalizeComponentInfo(it) }.toSet()
+            parsedFilter.componentToDrawable.keys.intersect(normalizedMeta)
+        } else if (meta != null && !meta.basePackPackage.isNullOrBlank()) {
+            // Pack was built with only a Base Pack and 0 custom overrides
+            emptySet()
+        } else {
+            // Fallback for older packs built before iconcraft_meta.json existed
+            parsedFilter.componentToDrawable.keys
+        }
+
+        InstalledIconCraftPackStatus(
+            isInstalled = true,
+            customIconCount = activeCustomComponents.size,
+            basePackPackage = meta?.basePackPackage,
+            customComponents = activeCustomComponents
+        )
+    }
+
+    /**
+     * Fetches and retains active custom icons from the currently installed `com.iconcraft.pack` APK:
+     * - Checks if `com.iconcraft.pack` is installed via `PackageManager`.
+     * - Loads its `Resources` via `packageManager.getResourcesForApplication("com.iconcraft.pack")`.
+     * - Reads `assets/iconcraft_meta.json` if present (falling back gracefully to `appfilter.xml`).
+     * - Extracts each custom icon's PNG back into `filesDir/queue_icons/` as a `512x512 ARGB_8888` PNG
+     *   and maps it to its installed `InstalledApp` (keeping any already-queued local edits intact).
+     * - If `basePackPackage` was saved in metadata and is still installed, restores that Base Pack selection.
+     */
+    suspend fun fetchInstalledIconCraftPack(
+        installedApps: List<InstalledApp>,
+        existingQueueItems: List<CustomIconQueueItem>,
+        queueStorage: QueueStorage,
+        installedIconPacks: List<InstalledIconPack>
+    ): FetchedIconCraftPackResult? = withContext(Dispatchers.IO) {
+        val pm = context.packageManager
+        val packResources = runCatching {
+            pm.getPackageInfo(ICONCRAFT_PACK_PKG, 0)
+            pm.getResourcesForApplication(ICONCRAFT_PACK_PKG)
+        }.getOrNull() ?: return@withContext null
+
+        val meta = readInstalledPackMetadata(packResources)
+        val parsedFilter = parseBasePackAppFilter(packResources, ICONCRAFT_PACK_PKG)
+
+        val targetComponents: Set<String> = if (meta != null && meta.customComponents.isNotEmpty()) {
+            meta.customComponents.map { normalizeComponentInfo(it) }.toSet()
+        } else if (meta != null && !meta.basePackPackage.isNullOrBlank()) {
+            emptySet()
+        } else {
+            parsedFilter.componentToDrawable.keys
+        }
+
+        val byComponent = installedApps.associateBy { it.componentInfo }
+        val byPackage = installedApps.groupBy { it.packageName }
+
+        val mergedList = ArrayList<CustomIconQueueItem>(existingQueueItems)
+        val existingComponents = existingQueueItems.map { it.app.componentInfo }.toHashSet()
+        val usedSlots = existingQueueItems.map { it.slotIndex }.toHashSet()
+
+        var newlyImported = 0
+
+        for ((componentInfo, drawableName) in parsedFilter.componentToDrawable) {
+            if (componentInfo !in targetComponents) continue
+            if (componentInfo in existingComponents) continue
+
+            val matchedApp = byComponent[componentInfo] ?: run {
+                val pkg = extractPackageFromComponentInfo(componentInfo)
+                pkg?.let { byPackage[it]?.firstOrNull() }
+            } ?: continue
+
+            if (matchedApp.componentInfo in existingComponents) continue
+
+            val bmp512 = loadPackDrawableAs512Bitmap(
+                packResources = packResources,
+                packPkg = ICONCRAFT_PACK_PKG,
+                drawableName = drawableName
+            ) ?: continue
+
+            val preferredSlot = parseSlotIndexFromDrawableName(drawableName)
+            val assignedSlot = if (preferredSlot != null && preferredSlot in 1..500 && preferredSlot !in usedSlots) {
+                preferredSlot
+            } else {
+                (1..500).firstOrNull { it !in usedSlots } ?: break
+            }
+            usedSlots.add(assignedSlot)
+            existingComponents.add(matchedApp.componentInfo)
+
+            val savedCustomFile = queueStorage.saveCustomIconBitmap(assignedSlot, bmp512)
+            val savedSourceFile = queueStorage.saveSourceBitmap(assignedSlot, bmp512)
+
+            mergedList.add(
+                CustomIconQueueItem(
+                    app = matchedApp,
+                    slotIndex = assignedSlot,
+                    customPngPath = savedCustomFile.absolutePath,
+                    sourcePngPath = savedSourceFile.absolutePath,
+                    customPreviewBitmap = bmp512.asImageBitmap(),
+                    shapeMaskName = "FULL_BLEED",
+                    imageScale = 1.0f,
+                    roundInnerCorners = false,
+                    backgroundColorArgb = 0,
+                    userZoom = 1.0f,
+                    userPanX = 0f,
+                    userPanY = 0f
+                )
+            )
+            newlyImported++
+        }
+
+        var restoredBasePack: String? = null
+        val savedBasePkg = meta?.basePackPackage?.takeIf { it.isNotBlank() }
+        if (savedBasePkg != null && installedIconPacks.any { it.packageName == savedBasePkg }) {
+            setSelectedBasePackPackage(savedBasePkg)
+            restoredBasePack = savedBasePkg
+        }
+
+        if (newlyImported > 0) {
+            queueStorage.saveQueue(mergedList)
+        }
+
+        FetchedIconCraftPackResult(
+            mergedQueueItems = mergedList,
+            newlyImportedCount = newlyImported,
+            retainedExistingCount = existingQueueItems.size,
+            restoredBasePackPackage = restoredBasePack
+        )
+    }
+
+    private fun readInstalledPackMetadata(packResources: Resources): IconCraftPackMetadata? {
+        return runCatching {
+            val jsonText = packResources.assets.open(ApkPatcherAndSigner.META_ASSET_PATH).use { stream ->
+                stream.bufferedReader(Charsets.UTF_8).readText()
+            }
+            ApkPatcherAndSigner.parseMetaJson(jsonText)
+        }.getOrNull()
+    }
+
+    private fun parseSlotIndexFromDrawableName(drawableName: String): Int? {
+        if (!drawableName.startsWith("custom_icon_")) return null
+        return drawableName.removePrefix("custom_icon_").toIntOrNull()
+    }
+
+    private fun loadPackDrawableAs512Bitmap(
+        packResources: Resources,
+        packPkg: String,
+        drawableName: String
+    ): Bitmap? {
+        return runCatching {
+            val resId = packResources.getIdentifier(drawableName, "drawable", packPkg)
+            if (resId == 0) return null
+            val drawable = packResources.getDrawable(resId, null) ?: return null
+            renderDrawableToBitmap(drawable, 512)
+        }.getOrNull()
     }
 
     /**
@@ -104,7 +290,7 @@ class BaseIconPackManager(private val context: Context) {
 
         // Exclude IconCraft studio and our generated IconCraft Pack
         discoveredPackages.remove(context.packageName)
-        discoveredPackages.remove("com.iconcraft.pack")
+        discoveredPackages.remove(ICONCRAFT_PACK_PKG)
 
         val packs = ArrayList<InstalledIconPack>()
         for (pkg in discoveredPackages) {
@@ -138,6 +324,8 @@ class BaseIconPackManager(private val context: Context) {
         maxSlots: Int = 500,
         onProgress: (String) -> Unit = {}
     ): MergedPackPayload = withContext(Dispatchers.IO) {
+        val explicitCustomComponents = userQueueItems.map { it.app.componentInfo }
+
         if (basePackPackageName.isNullOrBlank()) {
             return@withContext MergedPackPayload(
                 items = userQueueItems,
@@ -145,7 +333,9 @@ class BaseIconPackManager(private val context: Context) {
                 inMemoryPngBytesByFilename = emptyMap(),
                 userCustomizedCount = userQueueItems.size,
                 inheritedBaseCount = 0,
-                basePackLabel = null
+                basePackLabel = null,
+                basePackPackage = null,
+                customComponents = explicitCustomComponents
             )
         }
 
@@ -158,7 +348,9 @@ class BaseIconPackManager(private val context: Context) {
             inMemoryPngBytesByFilename = emptyMap(),
             userCustomizedCount = userQueueItems.size,
             inheritedBaseCount = 0,
-            basePackLabel = null
+            basePackLabel = null,
+            basePackPackage = null,
+            customComponents = explicitCustomComponents
         )
 
         val basePackLabel = runCatching {
@@ -271,7 +463,9 @@ class BaseIconPackManager(private val context: Context) {
             inMemoryPngBytesByFilename = inMemoryBytes,
             userCustomizedCount = userQueueItems.size,
             inheritedBaseCount = inheritedCount,
-            basePackLabel = basePackLabel
+            basePackLabel = basePackLabel,
+            basePackPackage = basePackPackageName,
+            customComponents = explicitCustomComponents
         )
     }
 
@@ -285,7 +479,7 @@ class BaseIconPackManager(private val context: Context) {
     )
 
     /**
-     * Parses `appfilter.xml` from the Base Pack, checking:
+     * Parses `appfilter.xml` from an icon pack, checking:
      * 1. `res/xml/appfilter.xml` via `XmlResourceParser`
      * 2. `res/raw/appfilter.xml`
      * 3. `assets/appfilter.xml`
@@ -452,6 +646,7 @@ class BaseIconPackManager(private val context: Context) {
     }
 
     companion object {
+        const val ICONCRAFT_PACK_PKG = "com.iconcraft.pack"
         private const val PREFS_NAME = "iconcraft_base_pack_prefs"
         private const val KEY_BASE_PACK_PKG = "selected_base_pack_package"
     }

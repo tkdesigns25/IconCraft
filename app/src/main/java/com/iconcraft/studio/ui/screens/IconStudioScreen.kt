@@ -148,6 +148,17 @@ fun IconStudioScreen(
         mutableFloatStateOf(initialQueueItem?.userPanY ?: 0f)
     }
 
+    // Track initial bitmap reference so picking a replacement photo resets pan/zoom cleanly
+    var lastSeenBitmap by remember { mutableStateOf(uploadedBitmap) }
+    LaunchedEffect(uploadedBitmap) {
+        if (uploadedBitmap != null && uploadedBitmap !== lastSeenBitmap) {
+            lastSeenBitmap = uploadedBitmap
+            userZoom = 1.0f
+            userPanX = 0f
+            userPanY = 0f
+        }
+    }
+
     // Background fill color (0 = No Background / Transparent, otherwise ARGB color)
     // Preserves exact user choice (including 0 = No Background) when editing a saved queue item.
     var backgroundFillColor by remember(initialQueueItem) {
@@ -217,9 +228,13 @@ fun IconStudioScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "512×512 ARGB_8888 • Pan & Pinch to Crop",
+                            text = if (initialQueueItem != null) {
+                                "Editing ${initialQueueItem.drawableName} • Keeps same app & slot"
+                            } else {
+                                "512×512 ARGB_8888 • Pan & Pinch to Crop"
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (initialQueueItem != null) EmeraldAccent else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 },
@@ -389,6 +404,26 @@ fun IconStudioScreen(
                             userPanX = 0f
                             userPanY = 0f
                         }
+                    )
+                }
+            }
+
+            if (initialQueueItem != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onPickNewPhoto,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(38.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Image,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Replace Image (Keep ${targetApp.appName} & ${initialQueueItem.drawableName})",
+                        style = MaterialTheme.typography.labelMedium
                     )
                 }
             }

@@ -2,6 +2,7 @@ package com.iconcraft.studio
 
 import com.android.apksig.ApkSigner
 import com.android.apksig.ApkVerifier
+import com.iconcraft.studio.apk.ApkPatcherAndSigner
 import com.iconcraft.studio.apk.AppFilterExtras
 import com.iconcraft.studio.apk.AxmlEncoder
 import com.iconcraft.studio.model.CustomIconQueueItem
@@ -196,6 +197,29 @@ class Phase2PipelineTest {
         val mergedAxmlBuf = ByteBuffer.wrap(mergedAxml).order(ByteOrder.LITTLE_ENDIAN)
         assertEquals(0x0003, mergedAxmlBuf.getShort(0).toInt() and 0xFFFF)
         assertEquals(mergedAxml.size, mergedAxmlBuf.getInt(4))
+
+        // Verify assets/iconcraft_meta.json encoding & parsing roundtrip
+        val metaBytes = ApkPatcherAndSigner.encodeMetaJson(
+            basePackPackage = "com.whicons.iconpack",
+            customComponents = listOf("ComponentInfo{com.letterboxd.buzz/com.letterboxd.buzz.ui.MainActivity}")
+        )
+        val parsedMeta = ApkPatcherAndSigner.parseMetaJson(metaBytes.decodeToString())
+        assertEquals("com.whicons.iconpack", parsedMeta?.basePackPackage)
+        assertEquals(
+            listOf("ComponentInfo{com.letterboxd.buzz/com.letterboxd.buzz.ui.MainActivity}"),
+            parsedMeta?.customComponents
+        )
+
+        val metaNoBase = ApkPatcherAndSigner.encodeMetaJson(
+            basePackPackage = null,
+            customComponents = listOf("ComponentInfo{com.spotify.music/com.spotify.music.MainActivity}")
+        )
+        val parsedNoBase = ApkPatcherAndSigner.parseMetaJson(metaNoBase.decodeToString())
+        assertEquals(null, parsedNoBase?.basePackPackage)
+        assertEquals(
+            listOf("ComponentInfo{com.spotify.music/com.spotify.music.MainActivity}"),
+            parsedNoBase?.customComponents
+        )
     }
 
     private fun buildTestSelfSignedCert(pubEncoded: ByteArray, privKey: java.security.PrivateKey): X509Certificate {
