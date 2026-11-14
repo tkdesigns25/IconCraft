@@ -1,86 +1,70 @@
-# IconCraft — Custom Selective Icon Studio
+# IconCraft
 
-**IconCraft** is a 100% offline, open-source Android studio built with **Kotlin + Jetpack Compose** that lets you replace the launcher icon of **only the specific apps you choose** (such as *Letterboxd*) with custom `512×512` artwork—without forcing a global shape mask over the rest of your installed apps.
+Change the icon of *any* specific app on your Android phone (like Letterboxd, Spotify, or Instagram) using your own images. No subscriptions, no ads, and all your other apps stay untouched.
 
----
-
-## ✨ What IconCraft Does
-
-1. **Selective Custom Icons (Zero Global Masking)**
-   - Compiles and signs a real Android Icon Pack APK (`com.iconcraft.pack`) directly on your device in under 2 seconds.
-   - When **Base Icon Pack** is set to `"None — Keep System Icons"`, the generated `appfilter.xml` contains **only** `<item component="..." drawable="..." />` mappings for the apps in your queue and omits `<iconback>`, `<iconmask>`, `<iconupon>`, and `<scale>`—keeping every other app on your phone 100% untouched.
-
-2. **Optional Base Icon Pack Inheritance (Merge Mode)**
-   - Already using a third-party icon pack? Select any installed icon pack (`org.adw.launcher.THEMES`, `com.novalauncher.THEME`, `com.anddoes.launcher.THEME`) as your **Base Pack** on the Home screen.
-   - IconCraft inherits the Base Pack's themed icons and masking rules for up to 500 installed launchable apps while giving your custom IconCraft overrides top priority.
-
-3. **Non-Destructive Single-App Icon Studio**
-   - Interactive pan & pinch-to-zoom canvas with outer shape masks (`Rounded Square`, `Square`, `Circle`, `Full Bleed`).
-   - Independent inner image scaling (`30%`–`120%`) with optional rounded inner corners over a full-bleed background fill (`No Background`, `androidx.palette` auto-extracted swatches, or interactive canvas eyedropper).
-   - Full edit support: reopen any queued icon via the pencil button to tweak zoom, pan, scale, or background without starting over.
-
-4. **Universal 1×1 Home Screen Widget Fallback**
-   - Includes a customizable `1×1` Home Screen widget (`CustomIconWidgetProvider`) that launches your target app directly via `PendingIntent`—**with zero Android shortcut corner badge/watermark**.
-
-5. **Experimental Auto-Theme Lab (100% Offline, Zero AI)**
-   - Upload a single inspiration image (e.g., a movie poster or wallpaper) to extract its 6-color `Palette` and procedurally generate themed icons across up to 200 installed apps on-device using pure `Bitmap`, `Canvas`, and `ColorMatrix` math (*Poster Texture*, *Neon Glow*, and *Minimal Duotone* styles).
+### 👉 [**Download Latest APK from GitHub Releases**](../../releases/latest)
 
 ---
 
-## 📱 Device & Launcher Compatibility
+## Screenshots
 
-| Device / Launcher | Native Selective Icon Pack Support | How to Apply `IconCraft Pack` |
-| :--- | :--- | :--- |
-| **Nothing OS** (`com.nothing.launcher`) | ✅ Supported natively | Long-press Home Screen → *Customization* → *Icon pack* → Select **IconCraft Pack** |
-| **OnePlus / Oppo / Realme** (*OxygenOS / ColorOS / Realme UI*) | ✅ Supported natively | Long-press Home Screen → *Icons* → Select **IconCraft Pack** *(or long-press an individual app → Edit → tap icon)* |
-| **Samsung One UI** | ✅ Supported via Good Lock | Open **Good Lock** → **Theme Park** → *Icon* → *Create New* → *Iconpack* → Select **IconCraft Pack** |
-| **Xiaomi HyperOS 3+ / MIUI** | ⚠️ Partial / Theme Store | Supported on launchers with external icon pack pickers, or use the **1×1 Home Widget** fallback |
-| **Custom Launchers** (*Nova, Lawnchair, Smart Launcher, Niagara, Action, Apex*) | ✅ Supported natively | Launcher Settings → *Look & Feel* / *Icons* → *Icon Pack* → Select **IconCraft Pack** (or per-app edit) |
-| **Google Pixel / Motorola / Stock Android** | 🧩 Via 1×1 Widget Fallback | Stock Pixel Launcher does not load third-party icon packs; long-press Home Screen → *Widgets* → **IconCraft → 1×1 Custom Icon** (zero watermark) |
-
----
-
-## 📸 Screenshots
-
-> _Screenshots coming soon! Drop your screenshots in `docs/screenshots/` and link them here._
+> _Screenshots coming soon! Drop your home screen and app screenshots here._
 
 <!--
-| Home & Queue | Icon Studio | Launcher Apply Guide | Auto-Theme Lab |
+| Home Screen | Icon Studio | Apply Guide | Auto-Theme Lab |
 | :---: | :---: | :---: | :---: |
 | ![Home](docs/screenshots/home.png) | ![Studio](docs/screenshots/studio.png) | ![Apply](docs/screenshots/apply.png) | ![Lab](docs/screenshots/lab.png) |
 -->
 
 ---
 
-## 🔒 Privacy & Permissions
+## What It Can Do
 
-IconCraft is **100% offline** and **does not request `android.permission.INTERNET`**. No analytics, telemetry, crash reporters, or network calls exist in the codebase.
-
-### Why These Permissions Are Used
-- `android.permission.QUERY_ALL_PACKAGES`: Required so IconCraft can list your installed launchable apps (`ACTION_MAIN` + `CATEGORY_LAUNCHER`) and detect installed third-party icon packs to write exact `ComponentInfo{packageName/activityName}` entries into `appfilter.xml`.
-- `android.permission.REQUEST_INSTALL_PACKAGES`: Required so IconCraft can hand the locally generated `IconCraft_Pack.apk` to Android's system Package Installer via `FileProvider`.
-
-### On-Device Signing Security
-On first build, IconCraft generates a unique RSA-2048 signing keypair and self-signed X.509 certificate stored in app-private storage (`filesDir/iconcraft_keystore.p12`), encrypted with a random 256-bit password sealed inside the hardware-backed **Android Keystore (`AES/GCM/NoPadding`)**. Every subsequent update to your icon pack is signed with this same persistent device key so Android updates `com.iconcraft.pack` seamlessly in place.
+- **Change only the apps you pick:** Swap just Letterboxd (or a few favorite apps) while keeping the rest of your phone completely normal.
+- **Keep your current icon pack:** Already using an icon pack you love? IconCraft can merge your custom icons with your existing pack so you don't lose your home screen style.
+- **Easy built-in editor:** Crop, zoom, adjust padding, round corners, and pick background colors without needing another editing app.
+- **Auto-Theme Lab (Experimental):** Upload 1 movie poster or wallpaper and instantly match *all* your apps to its colors and style (Poster Texture, Neon Glow, Minimal) — runs 100% on your phone with zero AI subscriptions.
+- **1×1 Home Widget mode:** Even on phones that block custom icon packs (like Google Pixel), drop clean custom app icons onto your Home Screen with no ugly watermarks.
 
 ---
 
-## 🛡️ Play Protect & Sideloading Note
+## Will It Work on My Phone?
 
-Because IconCraft compiles and signs a brand-new `IconCraft_Pack.apk` locally on your phone using your device's unique self-signed certificate:
-1. The first time you tap **Build & Install Icon Pack**, Android may ask you to grant **Install unknown apps** permission to IconCraft.
-2. **Google Play Protect** may display an *"Unrecognized app / App scan recommended"* prompt when installing either IconCraft (if sideloaded from GitHub Releases) or the locally generated `IconCraft Pack` APK. This is standard Android behavior for self-signed APKs that have never been uploaded to Google Play—tap **Scan app** or **More details → Install anyway** to proceed.
+- **Works natively (no extra launcher needed):** OnePlus, Oppo, Realme, Nothing Phone, Samsung (using Good Lock → Theme Park), and newer Xiaomi (HyperOS 3+).
+- **Works on any Android phone** if you use a custom launcher like Nova Launcher, Lawnchair, or Smart Launcher.
+- **Google Pixel / Motorola / Stock Android:** Use the built-in **1×1 Widget** option (changes Home Screen icons, though App Drawer icons stay default) or use a custom launcher.
+- **iPhone (iOS):** Not supported (Android only).
 
 ---
 
-## 🛠️ How to Build from Source
+## How to Use It
+
+1. Download and install the latest `.apk` from [**Releases**](../../releases/latest).
+2. Open IconCraft, tap **Customize an App**, pick your app (e.g., Letterboxd), and choose any photo from your gallery.
+3. Tap **Build & Install Icon Pack** — Android will ask you to install the personal icon pack your phone just created.
+4. Follow the 2-step guide shown on screen for your phone brand to apply **IconCraft Pack**.
+
+---
+
+## Is It Safe? / Why Does Play Protect Warn Me?
+
+- **100% Offline:** IconCraft doesn't even have permission to access the internet. Your photos and app list never leave your phone.
+- **Why Android shows a warning:** Because the app isn't on the Google Play Store and builds your custom icon pack directly on your device, Android/Play Protect shows a standard "Unknown app" prompt.
+- **Why it asks to see installed apps & install packages:** Only so you can pick which app's icon to change and install the custom icon pack you just made.
+
+---
+
+## For Developers (Build from Source)
+
+<details>
+<summary><strong>Click to expand build instructions & technical architecture</strong></summary>
 
 ### Prerequisites
 - **JDK 17**
 - **Android SDK** (`compileSdk 35`, `minSdk 26`)
 
-### 1. Build Debug APK & Run Unit Tests
-The `:app` build automatically compiles `:iconpack_template` and copies the unsigned template APK into `app/src/main/assets/template_iconpack.apk` via the `:app:syncTemplateApk` Gradle task.
+### Build & Test Commands
+The `:app` build automatically compiles `:iconpack_template` (generating 500 transparent `1×1` PNG slots via `:iconpack_template:ensure500TemplateSlots`) and copies the unsigned template APK into `app/src/main/assets/template_iconpack.apk` via `:app:syncTemplateApk`.
 
 ```bash
 # Run unit tests (verifies binary AXML encoding, 500-slot template capacity, and v1+v2+v3 APK signing)
@@ -90,8 +74,8 @@ The `:app` build automatically compiles `:iconpack_template` and copies the unsi
 ./gradlew assembleDebug
 ```
 
-### 2. Build Signed Release APK (Optional)
-To build a signed, R8-minified release APK, create an untracked `keystore.properties` file in the repository root:
+### Release Signing (Optional)
+To build a signed release APK, create an untracked `keystore.properties` file in the repository root:
 
 ```properties
 storeFile=your-release-key.jks
@@ -105,8 +89,15 @@ Then run:
 ./gradlew assembleRelease
 ```
 
+### Architecture & Security Notes
+- **Zero Network Access**: Does not declare `android.permission.INTERNET`.
+- **On-Device APK Patching & Signing**: Patches `assets/appfilter.xml`, `res/xml/appfilter.xml` (binary AXML), `AndroidManifest.xml`, and `res/drawable-nodpi/custom_icon_XXX.png`, then signs on-device with `com.android.tools.build:apksig` (v1 + v2 + v3 schemes).
+- **Hardware-Backed Keystore Protection**: Generates a per-device RSA-2048 `.p12` keystore in app-private storage (`filesDir/iconcraft_keystore.p12`), encrypted with a random 256-bit password wrapped by Android Keystore (`AES/GCM/NoPadding`).
+
+</details>
+
 ---
 
-## 📄 License
+## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
