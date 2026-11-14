@@ -30,24 +30,22 @@
 <table>
   <tr>
     <td align="center" width="33%">
-      <!-- Drop screenshot at docs/screenshots/home.png and uncomment: -->
-      <!-- <img src="docs/screenshots/home.png" width="240" alt="Home Screen & Queue" /> -->
-      <em>Home & Base Pack Queue</em>
+      <img src="docs/screenshots/home.jpg" width="250" alt="Home Screen & Queue" />
+      <br />
+      <sub><b>Home & Base Pack Queue</b></sub>
     </td>
     <td align="center" width="33%">
-      <!-- Drop screenshot at docs/screenshots/studio.png and uncomment: -->
-      <!-- <img src="docs/screenshots/studio.png" width="240" alt="Icon Studio Editor" /> -->
-      <em>Built-in Icon Studio</em>
+      <img src="docs/screenshots/studio.jpg" width="250" alt="Icon Studio Editor" />
+      <br />
+      <sub><b>Built-in Icon Studio</b></sub>
     </td>
     <td align="center" width="33%">
-      <!-- Drop screenshot at docs/screenshots/lab.png and uncomment: -->
-      <!-- <img src="docs/screenshots/lab.png" width="240" alt="Auto-Theme Lab" /> -->
-      <em>Auto-Theme Lab</em>
+      <img src="docs/screenshots/lab.jpg" width="250" alt="Auto-Theme Lab" />
+      <br />
+      <sub><b>Auto-Theme Lab</b></sub>
     </td>
   </tr>
 </table>
-
-<sub><i>Drop your screenshot PNGs into <code>docs/screenshots/</code> and uncomment the <code>&lt;img&gt;</code> tags above to display them side-by-side.</i></sub>
 </div>
 
 ---
