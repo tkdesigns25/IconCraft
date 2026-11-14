@@ -60,6 +60,27 @@ object LauncherInspector {
         for (pkg in candidatePacks) {
             sb.appendLine("--- Package: $pkg ---")
             sb.appendLine(dumpManifestQueriesAndFilters(pm, pkg, includeQueries = false, includeActivityFilters = true))
+            if (pkg.startsWith("com.nothing.icon")) {
+                runCatching {
+                    val res = pm.getResourcesForApplication(pkg)
+                    val xmlId = res.getIdentifier("appfilter", "xml", pkg)
+                    val rawId = res.getIdentifier("appfilter", "raw", pkg)
+                    sb.appendLine("  res/xml/appfilter=0x${xmlId.toString(16)}, res/raw/appfilter=0x${rawId.toString(16)}")
+                    if (xmlId != 0) {
+                        var count = 0
+                        res.getXml(xmlId).use { parser ->
+                            var ev = parser.eventType
+                            while (ev != XmlPullParser.END_DOCUMENT) {
+                                if (ev == XmlPullParser.START_TAG && parser.name == "item") count++
+                                ev = parser.next()
+                            }
+                        }
+                        sb.appendLine("  appfilter <item> count: $count")
+                    }
+                }.onFailure { err ->
+                    sb.appendLine("  appfilter inspect error: ${err.message}")
+                }
+            }
         }
 
         // 3. Verify installed com.iconcraft.pack
@@ -77,18 +98,24 @@ object LauncherInspector {
                     res.getXml(xmlId).use { parser ->
                         var itemCount = 0
                         val samples = ArrayList<String>()
+                        val probeMatches = ArrayList<String>()
                         var event = parser.eventType
                         while (event != XmlPullParser.END_DOCUMENT) {
                             if (event == XmlPullParser.START_TAG && parser.name == "item") {
                                 itemCount++
-                                val comp = parser.getAttributeValue(null, "component")
-                                val draw = parser.getAttributeValue(null, "drawable")
+                                val comp = parser.getAttributeValue(null, "component") ?: ""
+                                val draw = parser.getAttributeValue(null, "drawable") ?: ""
                                 if (samples.size < 3) samples.add("$comp -> $draw")
+                                if (comp.contains("com.android.chrome") || comp.contains("com.brave.browser")) {
+                                    probeMatches.add("$comp -> $draw")
+                                }
                             }
                             event = parser.next()
                         }
                         sb.appendLine("Resources.getXml(appfilter) parsed OK: $itemCount item(s)")
                         samples.forEach { sb.appendLine("  • $it") }
+                        sb.appendLine("Browser probes (Chrome/Brave): ${probeMatches.size}")
+                        probeMatches.forEach { sb.appendLine("  • $it") }
                     }
                 }
             }.onFailure { err ->

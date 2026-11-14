@@ -30,6 +30,9 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.ByteArrayOutputStream
 import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -377,14 +380,7 @@ class BaseIconPackManager(private val context: Context) {
                 val rawLabel = pm.getApplicationLabel(appInfo).toString().ifBlank { pkg }
                 val isNothing = isNothingIconPack(pkg)
                 val displayLabel = if (isNothing) {
-                    if (rawLabel.equals("Nothing", ignoreCase = true) ||
-                        rawLabel.equals("Nothing Icon", ignoreCase = true) ||
-                        rawLabel.equals("Nothing Icon Pack", ignoreCase = true)
-                    ) {
-                        "Nothing Icon Pack (Nothing UI Style)"
-                    } else {
-                        "$rawLabel (Nothing UI Style)"
-                    }
+                    "Nothing Icons (App)"
                 } else {
                     rawLabel
                 }
@@ -402,7 +398,7 @@ class BaseIconPackManager(private val context: Context) {
                         packLabel = displayLabel,
                         iconImageBitmap = bmp?.asImageBitmap(),
                         subtitle = if (isNothing) {
-                            "Lowkey Nothing UI monochrome icons for all other apps • $pkg"
+                            "Inherits Nothing Icons app + adds dark circle & auto-monochrome • $pkg"
                         } else {
                             pkg
                         }
@@ -411,23 +407,26 @@ class BaseIconPackManager(private val context: Context) {
             }
         }
 
-        // Ensure Nothing Icon Pack (Nothing UI Style) is always available on Nothing devices
-        // (and as a built-in Nothing UI monochrome option even if com.nothing.icon is embedded in the launcher)
-        if (packs.none { isNothingIconPack(it.packageName) }) {
-            val badgeBmp = createNothingPackBadgeBitmap(96)
-            packs.add(
-                InstalledIconPack(
-                    packageName = NOTHING_ICON_PACK_PKG,
-                    packLabel = "Nothing Icon Pack (Nothing UI Style)",
-                    iconImageBitmap = badgeBmp.asImageBitmap(),
-                    subtitle = "Lowkey Nothing UI monochrome icons for all non-customized apps"
-                )
+        // Always expose IconCraft's built-in Nothing OS Monochrome synthesizer at the top:
+        // produces uniform #17181A dark matte circles + crisp #F1F3F5 white glyphs matching Nothing OS's built-in "Nothing" pack.
+        val badgeBmp = createNothingPackBadgeBitmap(96)
+        packs.add(
+            InstalledIconPack(
+                packageName = NOTHING_BUILTIN_PKG,
+                packLabel = "Nothing Style Monochrome (Nothing OS Look)",
+                iconImageBitmap = badgeBmp.asImageBitmap(),
+                subtitle = "Matches Nothing OS built-in dark circle + crisp white glyph for all other apps"
             )
-        }
+        )
 
         packs.sortedWith(
-            compareBy<InstalledIconPack> { !isNothingIconPack(it.packageName) }
-                .thenBy { it.packLabel.lowercase() }
+            compareBy<InstalledIconPack> {
+                when {
+                    it.packageName == NOTHING_BUILTIN_PKG -> 0
+                    isNothingIconPack(it.packageName) -> 1
+                    else -> 2
+                }
+            }.thenBy { it.packLabel.lowercase() }
         )
     }
 
@@ -482,15 +481,19 @@ class BaseIconPackManager(private val context: Context) {
             )
         }
 
-        val basePackLabel = runCatching {
-            val appInfo = pm.getApplicationInfo(basePackPackageName, 0)
-            val raw = pm.getApplicationLabel(appInfo).toString()
-            if (isNothingPack && (raw.isBlank() || raw.equals("Nothing", ignoreCase = true))) {
-                "Nothing Icon Pack"
-            } else {
-                raw
-            }
-        }.getOrDefault(if (isNothingPack) "Nothing Icon Pack" else basePackPackageName)
+        val basePackLabel = if (basePackPackageName == NOTHING_BUILTIN_PKG) {
+            "Nothing Style Monochrome"
+        } else {
+            runCatching {
+                val appInfo = pm.getApplicationInfo(basePackPackageName, 0)
+                val raw = pm.getApplicationLabel(appInfo).toString()
+                if (isNothingPack && (raw.isBlank() || raw.equals("Nothing", ignoreCase = true))) {
+                    "Nothing Icons"
+                } else {
+                    raw
+                }
+            }.getOrDefault(if (isNothingPack) "Nothing Icons" else basePackPackageName)
+        }
 
         onProgress("Reading Base Pack ($basePackLabel)...")
         val parsed = if (baseResources != null) {
@@ -546,16 +549,21 @@ class BaseIconPackManager(private val context: Context) {
         }
 
         // 2. Import <iconback>, <iconmask>, <iconupon>, and <scale> from Base Pack if present
-        val iconBackSlots = parsed.iconBackDrawables.mapNotNull { importBaseDrawableToSlot(it) }
-        val iconMaskSlots = parsed.iconMaskDrawables.mapNotNull { importBaseDrawableToSlot(it) }
-        val iconUponSlots = parsed.iconUponDrawables.mapNotNull { importBaseDrawableToSlot(it) }
-
-        val extras = AppFilterExtras(
-            iconBackSlotNames = iconBackSlots,
-            iconMaskSlotNames = iconMaskSlots,
-            iconUponSlotNames = iconUponSlots,
-            scaleFactor = parsed.scaleFactor
-        )
+        //    (Skip for Nothing packs: Nothing icons already carry pre-masked #17181A dark circles
+        //    and extra launcher masking shrinks or clips custom queue icons.)
+        val extras = if (isNothingPack) {
+            AppFilterExtras()
+        } else {
+            val iconBackSlots = parsed.iconBackDrawables.mapNotNull { importBaseDrawableToSlot(it) }
+            val iconMaskSlots = parsed.iconMaskDrawables.mapNotNull { importBaseDrawableToSlot(it) }
+            val iconUponSlots = parsed.iconUponDrawables.mapNotNull { importBaseDrawableToSlot(it) }
+            AppFilterExtras(
+                iconBackSlotNames = iconBackSlots,
+                iconMaskSlotNames = iconMaskSlots,
+                iconUponSlotNames = iconUponSlots,
+                scaleFactor = parsed.scaleFactor
+            )
+        }
 
         val systemMaskBitmap256 by lazy { createSystemIconMaskBitmap(256) }
 
@@ -593,6 +601,7 @@ class BaseIconPackManager(private val context: Context) {
                         baseResources = baseResources,
                         basePackageName = basePackPackageName,
                         drawableName = baseDrawableName,
+                        nothingSurfaceMask = if (isNothingPack) systemMaskBitmap256 else null,
                         targetSize = 256
                     )
                 }
@@ -827,6 +836,7 @@ class BaseIconPackManager(private val context: Context) {
         baseResources: Resources,
         basePackageName: String,
         drawableName: String,
+        nothingSurfaceMask: Bitmap? = null,
         targetSize: Int = 256
     ): ByteArray? {
         return runCatching {
@@ -837,7 +847,24 @@ class BaseIconPackManager(private val context: Context) {
             if (resId == 0) return null
 
             val drawable = baseResources.getDrawable(resId, null) ?: return null
-            val bmp = renderDrawableToBitmap(drawable, targetSize) ?: return null
+            var bmp = renderDrawableToBitmap(drawable, targetSize) ?: return null
+
+            // Drawables from Play Store Nothing Icons are often transparent glyphs without a circle.
+            // Composite them on Nothing's #17181A dark matte circular surface so they never float naked.
+            if (nothingSurfaceMask != null) {
+                bmp = if (hasTransparentPerimeter(bmp)) {
+                    val isDarkGlyph = computeOpaqueMeanLuminance(bmp) < 120f
+                    compositeOnNothingDarkSurface(
+                        foregroundBmp = bmp,
+                        systemMaskBitmap = nothingSurfaceMask,
+                        targetSize = targetSize,
+                        tintToNothingWhite = isDarkGlyph,
+                        glyphScale = 1.0f
+                    )
+                } else {
+                    applySystemMask(bmp, nothingSurfaceMask, targetSize)
+                }
+            }
 
             val out = ByteArrayOutputStream()
             bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
@@ -848,13 +875,12 @@ class BaseIconPackManager(private val context: Context) {
     /**
      * Synthesizes a Nothing OS Monochrome (lowkey Nothing UI style) icon for an installed app:
      * 1. On Android 13+ (API 33+), uses the app's native `AdaptiveIconDrawable.monochrome` layer
-     *    drawn directly onto a transparent canvas (never wrapped in a secondary `AdaptiveIconDrawable`,
-     *    which in AOSP fills `mLayersBitmap` with opaque `Color.BLACK`), tinted to `#E6E8EC`
-     *    over Nothing's `#1C1D1F` dark charcoal surface.
-     * 2. If the app is an `AdaptiveIconDrawable` without a `<monochrome>` layer, converts its
-     *    isolated `foreground` layer non-destructively into Nothing monochrome shades.
-     * 3. For full-bleed or legacy icons, applies a non-destructive Nothing dark grayscale conversion
-     *    (inverting white backgrounds to `#1C1D1F` dark charcoal while keeping 100% of logo detail intact).
+     *    drawn directly onto a transparent canvas, tinted to `#F1F3F5` over `#17181A`.
+     * 2. If `AdaptiveIconDrawable.foreground` is available, detects & removes any inner container shell
+     *    (e.g. white circle behind MobiKwik's M) and lifts foreground logos cleanly to `#F1F3F5`.
+     * 3. For full-bleed / legacy icons, performs dominant container-ring color-distance segmentation
+     *    to turn any colored or white container background into `#17181A` while lifting logos to `#F1F3F5`.
+     * 4. Guaranteed fallback using `installedApp.iconBitmap` (or initial glyph) so no app is ever left unthemed.
      */
     private fun renderNothingMonochromeIconToPngBytes(
         pm: PackageManager,
@@ -862,114 +888,131 @@ class BaseIconPackManager(private val context: Context) {
         systemMaskBitmap: Bitmap,
         targetSize: Int = 256
     ): ByteArray? {
-        return runCatching {
-            val activityDrawable = runCatching {
-                pm.getActivityIcon(ComponentName(installedApp.packageName, installedApp.activityName))
-            }.getOrNull()
-            val appDrawable = runCatching {
-                pm.getApplicationIcon(installedApp.packageName)
-            }.getOrNull()
+        val activityDrawable = runCatching {
+            pm.getActivityIcon(ComponentName(installedApp.packageName, installedApp.activityName))
+        }.getOrNull()
+        val appDrawable = runCatching {
+            pm.getApplicationIcon(installedApp.packageName)
+        }.getOrNull()
 
-            val rawDrawable = activityDrawable ?: appDrawable
+        var resultBmp: Bitmap? = null
 
-            var resultBmp: Bitmap? = null
-
-            // Tier 1: Native Android 13+ AdaptiveIconDrawable.monochrome layer
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // Tier 1: Native Android 13+ AdaptiveIconDrawable.monochrome layer
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            resultBmp = runCatching {
                 val adaptiveWithMono = listOfNotNull(activityDrawable, appDrawable)
                     .filterIsInstance<AdaptiveIconDrawable>()
-                    .firstOrNull { it.monochrome != null }
+                    .firstOrNull { it.monochrome != null } ?: return@runCatching null
 
-                if (adaptiveWithMono != null) {
-                    adaptiveWithMono.setBounds(0, 0, targetSize, targetSize)
-                    val mono = adaptiveWithMono.monochrome?.mutate()
-                    if (mono != null) {
-                        val monoLayerBmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
-                        val monoCanvas = Canvas(monoLayerBmp)
-                        val inset = -(targetSize * 0.21f).toInt()
-                        mono.colorFilter = null
-                        mono.setBounds(inset, inset, targetSize - inset, targetSize - inset)
+                adaptiveWithMono.setBounds(0, 0, targetSize, targetSize)
+                val rawMono = adaptiveWithMono.monochrome ?: return@runCatching null
+                val mono = runCatching {
+                    rawMono.constantState?.newDrawable()?.mutate() ?: rawMono.mutate()
+                }.getOrDefault(rawMono)
+
+                val monoLayerBmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+                val monoCanvas = Canvas(monoLayerBmp)
+                val inset = -(targetSize * 0.21f).toInt()
+                mono.colorFilter = null
+                mono.setBounds(inset, inset, targetSize - inset, targetSize - inset)
+                mono.draw(monoCanvas)
+
+                var coverage = computeOpaqueCoverage(monoLayerBmp)
+                if (coverage < 0.005f) {
+                    runCatching {
+                        mono.setTint(Color.WHITE)
                         mono.draw(monoCanvas)
-
-                        var coverage = computeOpaqueCoverage(monoLayerBmp)
-                        if (coverage < 0.005f) {
-                            runCatching {
-                                mono.setTint(Color.WHITE)
-                                mono.draw(monoCanvas)
-                            }
-                            coverage = computeOpaqueCoverage(monoLayerBmp)
-                        }
-
-                        if (coverage in 0.005f..0.68f) {
-                            resultBmp = compositeOnNothingDarkSurface(
-                                foregroundBmp = monoLayerBmp,
-                                systemMaskBitmap = systemMaskBitmap,
-                                targetSize = targetSize,
-                                tintToNothingWhite = true,
-                                glyphScale = 1.0f
-                            )
-                        } else if (coverage > 0.68f) {
-                            resultBmp = renderFullBitmapAsNothingMonochrome(
-                                src = monoLayerBmp,
-                                systemMaskBitmap = systemMaskBitmap,
-                                targetSize = targetSize
-                            )
-                        }
                     }
+                    coverage = computeOpaqueCoverage(monoLayerBmp)
                 }
-            }
 
-            // Tier 2: Direct AdaptiveIconDrawable.foreground monochrome conversion (when .monochrome is absent)
-            if (resultBmp == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val adaptiveWithFg = listOfNotNull(activityDrawable, appDrawable)
-                    .filterIsInstance<AdaptiveIconDrawable>()
-                    .firstOrNull { it.foreground != null }
-
-                if (adaptiveWithFg != null) {
-                    adaptiveWithFg.setBounds(0, 0, targetSize, targetSize)
-                    val fg = adaptiveWithFg.foreground?.mutate()
-                    if (fg != null) {
-                        val fgLayerBmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
-                        val fgCanvas = Canvas(fgLayerBmp)
-                        val inset = -(targetSize * 0.20f).toInt()
-                        fg.colorFilter = null
-                        fg.setBounds(inset, inset, targetSize - inset, targetSize - inset)
-                        fg.draw(fgCanvas)
-
-                        val coverage = computeOpaqueCoverage(fgLayerBmp)
-                        if (coverage in 0.008f..0.62f && hasTransparentPerimeter(fgLayerBmp)) {
-                            val monoFg = convertIsolatedForegroundToNothingMonochrome(fgLayerBmp, coverage)
-                            resultBmp = compositeOnNothingDarkSurface(
-                                foregroundBmp = monoFg,
-                                systemMaskBitmap = systemMaskBitmap,
-                                targetSize = targetSize,
-                                tintToNothingWhite = false,
-                                glyphScale = 1.0f
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Tier 3: Non-destructive Nothing dark grayscale conversion on the full icon
-            // (Never deletes pixels; preserves 100% of multi-color/legacy icon geometry)
-            if (resultBmp == null) {
-                val fullBmp = (rawDrawable?.let { renderDrawableToBitmap(it, targetSize) })
-                    ?: installedApp.iconBitmap?.let { Bitmap.createScaledBitmap(it, targetSize, targetSize, true) }
-                if (fullBmp != null) {
-                    resultBmp = renderFullBitmapAsNothingMonochrome(
-                        src = fullBmp,
+                when {
+                    coverage in 0.005f..0.68f -> compositeOnNothingDarkSurface(
+                        foregroundBmp = monoLayerBmp,
+                        systemMaskBitmap = systemMaskBitmap,
+                        targetSize = targetSize,
+                        tintToNothingWhite = true,
+                        glyphScale = 1.0f
+                    )
+                    coverage > 0.68f -> renderFullBitmapAsNothingMonochrome(
+                        src = monoLayerBmp,
                         systemMaskBitmap = systemMaskBitmap,
                         targetSize = targetSize
                     )
+                    else -> null
                 }
-            }
+            }.getOrNull()
+        }
 
-            val finalBmp = resultBmp ?: return null
-            val out = ByteArrayOutputStream()
-            finalBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-            out.toByteArray()
-        }.getOrNull()
+        // Tier 2: AdaptiveIconDrawable.foreground monochrome conversion (with inner shell stripping)
+        if (resultBmp == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            resultBmp = runCatching {
+                val adaptiveWithFg = listOfNotNull(activityDrawable, appDrawable)
+                    .filterIsInstance<AdaptiveIconDrawable>()
+                    .firstOrNull { it.foreground != null } ?: return@runCatching null
+
+                adaptiveWithFg.setBounds(0, 0, targetSize, targetSize)
+                val rawFg = adaptiveWithFg.foreground ?: return@runCatching null
+                val fg = runCatching {
+                    rawFg.constantState?.newDrawable()?.mutate() ?: rawFg.mutate()
+                }.getOrDefault(rawFg)
+
+                val fgLayerBmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+                val fgCanvas = Canvas(fgLayerBmp)
+                val inset = -(targetSize * 0.20f).toInt()
+                fg.colorFilter = null
+                fg.setBounds(inset, inset, targetSize - inset, targetSize - inset)
+                fg.draw(fgCanvas)
+
+                val coverage = computeOpaqueCoverage(fgLayerBmp)
+                if (coverage in 0.005f..0.72f && hasTransparentPerimeter(fgLayerBmp)) {
+                    val monoFg = convertIsolatedForegroundToNothingMonochrome(fgLayerBmp, coverage)
+                    compositeOnNothingDarkSurface(
+                        foregroundBmp = monoFg,
+                        systemMaskBitmap = systemMaskBitmap,
+                        targetSize = targetSize,
+                        tintToNothingWhite = false,
+                        glyphScale = 1.0f
+                    )
+                } else {
+                    null
+                }
+            }.getOrNull()
+        }
+
+        // Tier 3: Dominant container-ring color-distance segmentation on rendered full icon
+        if (resultBmp == null) {
+            resultBmp = runCatching {
+                val rawDrawable = activityDrawable ?: appDrawable
+                val fullBmp = rawDrawable?.let { renderDrawableToBitmap(it, targetSize) } ?: return@runCatching null
+                renderFullBitmapAsNothingMonochrome(
+                    src = fullBmp,
+                    systemMaskBitmap = systemMaskBitmap,
+                    targetSize = targetSize
+                )
+            }.getOrNull()
+        }
+
+        // Tier 4: Guaranteed fallback from already-loaded AppRepository iconBitmap (never leave an app unthemed)
+        if (resultBmp == null) {
+            resultBmp = runCatching {
+                val fallbackBmp = installedApp.iconBitmap
+                    ?.let { Bitmap.createScaledBitmap(it, targetSize, targetSize, true) }
+                if (fallbackBmp != null) {
+                    renderFullBitmapAsNothingMonochrome(
+                        src = fallbackBmp,
+                        systemMaskBitmap = systemMaskBitmap,
+                        targetSize = targetSize
+                    )
+                } else {
+                    renderFallbackMonogramIcon(installedApp.appName, systemMaskBitmap, targetSize)
+                }
+            }.getOrNull() ?: renderFallbackMonogramIcon(installedApp.appName, systemMaskBitmap, targetSize)
+        }
+
+        val out = ByteArrayOutputStream()
+        resultBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+        return out.toByteArray()
     }
 
     private fun hasTransparentPerimeter(bmp: Bitmap): Boolean {
@@ -995,9 +1038,14 @@ class BaseIconPackManager(private val context: Context) {
 
     /**
      * Converts an isolated foreground layer (with transparent perimeter) into Nothing monochrome shades:
-     * - If it's a compact single-color silhouette (`coverage < 0.36f` and `stdDev < 14.0`), tints to crisp `#E6E8EC`.
-     * - Otherwise normalizes internal luminance `[minLum..maxLum]` into `[0.30f..1.0f]` between `#1C1D1F` and `#E6E8EC`
-     *   so multi-color logos (like Chrome's 4-color ball, Brave's lion, or badges with text) keep every internal detail.
+     * 1. If the foreground has an opaque container shell (e.g., MobiKwik's white circle + dark M,
+     *    BookMyShow's red box + white logo), detects the uniform shell color along the foreground's
+     *    outer boundary and dissolves the shell into transparent `#17181A` while boosting the inner
+     *    emblem/glyph to crisp `#F1F3F5`.
+     * 2. If it's a compact single-tone glyph (`coverage < 0.30f`), tints all opaque pixels cleanly
+     *    to `#F1F3F5`.
+     * 3. For compact multi-tone glyphs without a container shell (e.g., Chrome wheel, Brave lion, Kite),
+     *    keeps all arms bright (`[0.62f..1.0f]`) against `#17181A` so nothing turns muddy dark grey.
      */
     private fun convertIsolatedForegroundToNothingMonochrome(src: Bitmap, coverage: Float): Bitmap {
         val w = src.width
@@ -1010,16 +1058,28 @@ class BaseIconPackManager(private val context: Context) {
         var lumSqSum = 0.0
         var minLum = 255f
         var maxLum = 0f
+        var minX = w
+        var maxX = -1
+        var minY = h
+        var maxY = -1
 
-        for (px in pixels) {
-            val a = Color.alpha(px)
-            if (a > 60) {
-                opaqueCount++
-                val lum = (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px))
-                lumSum += lum
-                lumSqSum += (lum * lum).toDouble()
-                if (lum < minLum) minLum = lum
-                if (lum > maxLum) maxLum = lum
+        for (y in 0 until h) {
+            val rowOffset = y * w
+            for (x in 0 until w) {
+                val px = pixels[rowOffset + x]
+                val a = Color.alpha(px)
+                if (a > 60) {
+                    opaqueCount++
+                    if (x < minX) minX = x
+                    if (x > maxX) maxX = x
+                    if (y < minY) minY = y
+                    if (y > maxY) maxY = y
+                    val lum = (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px))
+                    lumSum += lum
+                    lumSqSum += (lum * lum).toDouble()
+                    if (lum < minLum) minLum = lum
+                    if (lum > maxLum) maxLum = lum
+                }
             }
         }
 
@@ -1030,12 +1090,80 @@ class BaseIconPackManager(private val context: Context) {
         val variance = (lumSqSum / opaqueCount) - (meanLum * meanLum)
         val stdDev = sqrt(variance.coerceAtLeast(0.0))
 
+        val bgR = Color.red(NOTHING_BG_COLOR)
+        val bgG = Color.green(NOTHING_BG_COLOR)
+        val bgB = Color.blue(NOTHING_BG_COLOR)
         val fgR = Color.red(NOTHING_FG_COLOR)
         val fgG = Color.green(NOTHING_FG_COLOR)
         val fgB = Color.blue(NOTHING_FG_COLOR)
 
-        // Compact single-tone glyph silhouette: tint cleanly to Nothing off-white
-        if (coverage < 0.36f && stdDev < 14.0 && (maxLum - minLum) < 40f) {
+        // Check if foreground actually contains an opaque inner badge/container shell
+        val bw = (maxX - minX + 1).coerceAtLeast(1)
+        val bh = (maxY - minY + 1).coerceAtLeast(1)
+        if (coverage >= 0.24f && bw >= 24 && bh >= 24) {
+            val fcx = (minX + maxX) / 2f
+            val fcy = (minY + maxY) / 2f
+            val shellSamples = ArrayList<Int>(32)
+            for (ringFrac in floatArrayOf(0.36f, 0.43f)) {
+                val rx = bw * ringFrac
+                val ry = bh * ringFrac
+                for (i in 0 until 16) {
+                    val angle = i * (Math.PI / 8.0)
+                    val sx = (fcx + rx * cos(angle)).toInt().coerceIn(0, w - 1)
+                    val sy = (fcy + ry * sin(angle)).toInt().coerceIn(0, h - 1)
+                    val px = pixels[sy * w + sx]
+                    if (Color.alpha(px) > 140) shellSamples.add(px)
+                }
+            }
+
+            if (shellSamples.size >= 18) {
+                val (shellR, shellG, shellB, shellUniformity) = findMedoidRgb(shellSamples, tolerance = 42f)
+
+                var coreOpaque = 0
+                var coreContrast = 0
+                val coreRx = (bw * 0.24f).toInt().coerceAtLeast(4)
+                val coreRy = (bh * 0.24f).toInt().coerceAtLeast(4)
+                val cyi = fcy.toInt()
+                val cxi = fcx.toInt()
+                for (y in (cyi - coreRy)..(cyi + coreRy) step 2) {
+                    if (y !in 0 until h) continue
+                    for (x in (cxi - coreRx)..(cxi + coreRx) step 2) {
+                        if (x !in 0 until w) continue
+                        val px = pixels[y * w + x]
+                        if (Color.alpha(px) > 120) {
+                            coreOpaque++
+                            if (rgbDistance(px, shellR, shellG, shellB) > 36f) {
+                                coreContrast++
+                            }
+                        }
+                    }
+                }
+                val coreContrastRatio = if (coreOpaque > 0) coreContrast.toFloat() / coreOpaque else 0f
+
+                // If foreground is a container shell (white disk, orange card, etc.) with an inner logo:
+                if (shellUniformity >= 0.55f && coreContrastRatio >= 0.05f) {
+                    for (i in pixels.indices) {
+                        val px = pixels[i]
+                        val a = Color.alpha(px)
+                        if (a < 16) {
+                            pixels[i] = 0
+                            continue
+                        }
+                        val dist = rgbDistance(px, shellR, shellG, shellB)
+                        val t = ((dist - 22f) / 68f).coerceIn(0f, 1f).pow(0.75f)
+                        val r = (bgR + (fgR - bgR) * t).toInt().coerceIn(0, 255)
+                        val g = (bgG + (fgG - bgG) * t).toInt().coerceIn(0, 255)
+                        val b = (bgB + (fgB - bgB) * t).toInt().coerceIn(0, 255)
+                        pixels[i] = Color.argb(a, r, g, b)
+                    }
+                    out.setPixels(pixels, 0, w, 0, 0, w, h)
+                    return out
+                }
+            }
+        }
+
+        // Compact single-tone glyph silhouette: tint cleanly to Nothing crisp white
+        if (coverage < 0.34f && stdDev < 16.0 && (maxLum - minLum) < 48f) {
             for (i in pixels.indices) {
                 val a = Color.alpha(pixels[i])
                 pixels[i] = if (a < 16) 0 else Color.argb(a, fgR, fgG, fgB)
@@ -1044,10 +1172,9 @@ class BaseIconPackManager(private val context: Context) {
             return out
         }
 
-        // Multi-tone foreground logo/badge: preserve full internal contrast across [0.30..1.0]
-        val bgR = Color.red(NOTHING_BG_COLOR)
-        val bgG = Color.green(NOTHING_BG_COLOR)
-        val bgB = Color.blue(NOTHING_BG_COLOR)
+        // Compact multi-color foreground emblem/logo (e.g. Chrome wheel, Brave lion, Kite):
+        // Keep all colored logo strokes bright [0.64f..1.0f] so no colored segment turns muddy dark grey.
+        val baseFloor = if (coverage < 0.34f) 0.64f else 0.42f
         val lumSpan = (maxLum - minLum).coerceAtLeast(32f)
 
         for (i in pixels.indices) {
@@ -1059,7 +1186,7 @@ class BaseIconPackManager(private val context: Context) {
             }
             val lum = 0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px)
             val norm = ((lum - minLum) / lumSpan).coerceIn(0f, 1f)
-            val t = (0.30f + 0.70f * norm).coerceIn(0f, 1f)
+            val t = (baseFloor + (1f - baseFloor) * norm).coerceIn(0f, 1f)
             val r = (bgR + (fgR - bgR) * t).toInt().coerceIn(0, 255)
             val g = (bgG + (fgG - bgG) * t).toInt().coerceIn(0, 255)
             val b = (bgB + (fgB - bgB) * t).toInt().coerceIn(0, 255)
@@ -1070,11 +1197,14 @@ class BaseIconPackManager(private val context: Context) {
     }
 
     /**
-     * Non-destructively renders a full icon bitmap in Nothing UI dark monochrome style:
-     * - Samples the outer background ring (at radius 36% of width) vs the center glyph area.
-     * - If the icon has a bright/white background ring (`ringLum > 180`) with a darker central logo,
-     *   inverts luminance so the white background becomes Nothing dark `#1C1D1F` and the logo becomes `#E6E8EC`.
-     * - Never strips or deletes pixels, so complex icons remain 100% intact.
+     * Converts a full icon bitmap to Nothing OS dark matte circle + crisp white glyph style:
+     * - Samples the outer container ring (radii 33% and 39% of width) to find the medoid dominant
+     *   container color `(domR, domG, domB)`.
+     * - When a uniform or near-uniform container color surrounds a contrasting central emblem
+     *   (white, red, orange, blue, green, yellow, purple, or dark backgrounds), collapses the
+     *   container color to `#17181A` and boosts the contrasting logo/emblem to `#F1F3F5`.
+     * - For gradient/multi-tone containers, applies high-contrast Nothing dark-surface mapping.
+     * - Applies `systemMaskBitmap` (`DST_IN`) so corners always match Nothing OS's circle mask.
      */
     private fun renderFullBitmapAsNothingMonochrome(
         src: Bitmap,
@@ -1094,37 +1224,56 @@ class BaseIconPackManager(private val context: Context) {
 
         val cx = w / 2f
         val cy = h / 2f
-        val ringRadius = w * 0.36f
-        var ringLumSum = 0f
-        var ringCount = 0
-        for (i in 0 until 16) {
-            val angle = i * (Math.PI / 8.0)
-            val x = (cx + ringRadius * cos(angle)).toInt().coerceIn(0, w - 1)
-            val y = (cy + ringRadius * sin(angle)).toInt().coerceIn(0, h - 1)
-            val px = pixels[y * w + x]
-            if (Color.alpha(px) > 100) {
-                ringLumSum += (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px))
-                ringCount++
-            }
-        }
-        val ringMeanLum = if (ringCount > 0) ringLumSum / ringCount else 0f
-
-        var centerLumSum = 0f
-        var centerCount = 0
-        val centerBox = (w * 0.22f).toInt()
-        for (y in (h / 2 - centerBox)..(h / 2 + centerBox) step 2) {
-            for (x in (w / 2 - centerBox)..(w / 2 + centerBox) step 2) {
-                val px = pixels[y.coerceIn(0, h - 1) * w + x.coerceIn(0, w - 1)]
+        val ringSamples = ArrayList<Int>(32)
+        for (radiusFactor in floatArrayOf(0.33f, 0.39f)) {
+            val r = w * radiusFactor
+            for (i in 0 until 16) {
+                val angle = i * (Math.PI / 8.0)
+                val x = (cx + r * cos(angle)).toInt().coerceIn(0, w - 1)
+                val y = (cy + r * sin(angle)).toInt().coerceIn(0, h - 1)
+                val px = pixels[y * w + x]
                 if (Color.alpha(px) > 100) {
-                    centerLumSum += (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px))
-                    centerCount++
+                    ringSamples.add(px)
                 }
             }
         }
-        val centerMeanLum = if (centerCount > 0) centerLumSum / centerCount else ringMeanLum
 
-        // Invert if the icon has a light/white background and darker central logo
-        val invertLuminance = ringMeanLum > 180f && centerMeanLum < (ringMeanLum - 18f)
+        val (domR, domG, domB, ringMatchFraction) = if (ringSamples.isNotEmpty()) {
+            findMedoidRgb(ringSamples, tolerance = 42f)
+        } else {
+            MedoidResult(0f, 0f, 0f, 0f)
+        }
+
+        var centerOpaque = 0
+        var centerContrastCount = 0
+        var centerLumSum = 0f
+        val centerBox = (w * 0.24f).toInt().coerceAtLeast(4)
+        for (y in (h / 2 - centerBox)..(h / 2 + centerBox) step 2) {
+            if (y !in 0 until h) continue
+            for (x in (w / 2 - centerBox)..(w / 2 + centerBox) step 2) {
+                if (x !in 0 until w) continue
+                val px = pixels[y * w + x]
+                if (Color.alpha(px) > 100) {
+                    centerOpaque++
+                    centerLumSum += (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px))
+                    if (rgbDistance(px, domR, domG, domB) > 36f) {
+                        centerContrastCount++
+                    }
+                }
+            }
+        }
+        val centerContrastRatio = if (centerOpaque > 0) centerContrastCount.toFloat() / centerOpaque else 0f
+        val centerMeanLum = if (centerOpaque > 0) centerLumSum / centerOpaque else 128f
+        val ringMeanLum = if (ringSamples.isNotEmpty()) {
+            ringSamples.map { 0.299f * Color.red(it) + 0.587f * Color.green(it) + 0.114f * Color.blue(it) }.average().toFloat()
+        } else {
+            0f
+        }
+
+        val useContainerDistanceSegmentation =
+            ringSamples.size >= 10 && ringMatchFraction >= 0.45f && centerContrastRatio >= 0.04f
+        val invertLuminance = !useContainerDistanceSegmentation &&
+            ringMeanLum > 165f && centerMeanLum < (ringMeanLum - 16f)
 
         val bgR = Color.red(NOTHING_BG_COLOR)
         val bgG = Color.green(NOTHING_BG_COLOR)
@@ -1141,8 +1290,14 @@ class BaseIconPackManager(private val context: Context) {
                 pixels[i] = NOTHING_BG_COLOR
                 continue
             }
-            val rawLum = (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px)) / 255f
-            val t = if (invertLuminance) (1f - rawLum) else rawLum
+            val t = if (useContainerDistanceSegmentation) {
+                val dist = rgbDistance(px, domR, domG, domB)
+                ((dist - 20f) / 68f).coerceIn(0f, 1f).pow(0.76f)
+            } else {
+                val rawLum = (0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px)) / 255f
+                val baseT = if (invertLuminance) (1f - rawLum) else rawLum
+                baseT.coerceIn(0f, 1f).pow(1.30f)
+            }
             val r = (bgR + (fgR - bgR) * t).toInt().coerceIn(0, 255)
             val g = (bgG + (fgG - bgG) * t).toInt().coerceIn(0, 255)
             val b = (bgB + (fgB - bgB) * t).toInt().coerceIn(0, 255)
@@ -1150,15 +1305,112 @@ class BaseIconPackManager(private val context: Context) {
         }
         monoBmp.setPixels(pixels, 0, w, 0, 0, w, h)
 
+        return applySystemMask(monoBmp, systemMaskBitmap, targetSize)
+    }
+
+    private data class MedoidResult(
+        val r: Float,
+        val g: Float,
+        val b: Float,
+        val matchFraction: Float
+    )
+
+    private fun findMedoidRgb(samples: List<Int>, tolerance: Float): MedoidResult {
+        if (samples.isEmpty()) return MedoidResult(0f, 0f, 0f, 0f)
+        var bestIdx = 0
+        var bestDistSum = Float.MAX_VALUE
+        for (i in samples.indices) {
+            val p1 = samples[i]
+            val r1 = Color.red(p1).toFloat()
+            val g1 = Color.green(p1).toFloat()
+            val b1 = Color.blue(p1).toFloat()
+            var sum = 0f
+            for (j in samples.indices) {
+                sum += rgbDistance(samples[j], r1, g1, b1)
+            }
+            if (sum < bestDistSum) {
+                bestDistSum = sum
+                bestIdx = i
+            }
+        }
+        val seed = samples[bestIdx]
+        val seedR = Color.red(seed).toFloat()
+        val seedG = Color.green(seed).toFloat()
+        val seedB = Color.blue(seed).toFloat()
+
+        var sumR = 0f
+        var sumG = 0f
+        var sumB = 0f
+        var matchCount = 0
+        for (px in samples) {
+            if (rgbDistance(px, seedR, seedG, seedB) <= tolerance) {
+                sumR += Color.red(px)
+                sumG += Color.green(px)
+                sumB += Color.blue(px)
+                matchCount++
+            }
+        }
+        val denom = matchCount.coerceAtLeast(1)
+        return MedoidResult(
+            r = sumR / denom,
+            g = sumG / denom,
+            b = sumB / denom,
+            matchFraction = matchCount.toFloat() / samples.size
+        )
+    }
+
+    private fun rgbDistance(px: Int, r2: Float, g2: Float, b2: Float): Float {
+        val dr = Color.red(px) - r2
+        val dg = Color.green(px) - g2
+        val db = Color.blue(px) - b2
+        return sqrt(dr * dr + dg * dg + db * db)
+    }
+
+    private fun computeOpaqueMeanLuminance(bmp: Bitmap): Float {
+        val w = bmp.width
+        val h = bmp.height
+        val pixels = IntArray(w * h)
+        bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+        var lumSum = 0.0
+        var count = 0
+        for (px in pixels) {
+            if (Color.alpha(px) > 80) {
+                lumSum += (0.299 * Color.red(px) + 0.587 * Color.green(px) + 0.114 * Color.blue(px))
+                count++
+            }
+        }
+        return if (count > 0) (lumSum / count).toFloat() else 255f
+    }
+
+    private fun applySystemMask(src: Bitmap, systemMaskBitmap: Bitmap, targetSize: Int): Bitmap {
         val out = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
-        canvas.drawBitmap(monoBmp, 0f, 0f, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
-
+        canvas.drawBitmap(src, null, RectF(0f, 0f, targetSize.toFloat(), targetSize.toFloat()), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
         val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
             xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
         }
         canvas.drawBitmap(systemMaskBitmap, 0f, 0f, maskPaint)
         return out
+    }
+
+    private fun renderFallbackMonogramIcon(
+        appName: String,
+        systemMaskBitmap: Bitmap,
+        targetSize: Int
+    ): Bitmap {
+        val raw = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(raw)
+        canvas.drawColor(NOTHING_BG_COLOR)
+        val letter = appName.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = NOTHING_FG_COLOR
+            textSize = targetSize * 0.42f
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+        }
+        val baseline = (targetSize / 2f) - ((textPaint.descent() + textPaint.ascent()) / 2f)
+        canvas.drawText(letter, targetSize / 2f, baseline, textPaint)
+        return applySystemMask(raw, systemMaskBitmap, targetSize)
     }
 
     private fun compositeOnNothingDarkSurface(
@@ -1274,14 +1526,16 @@ class BaseIconPackManager(private val context: Context) {
     companion object {
         const val ICONCRAFT_PACK_PKG = "com.iconcraft.pack"
         const val NOTHING_ICON_PACK_PKG = "com.nothing.icon"
-        private const val NOTHING_BG_COLOR = 0xFF1C1D1F.toInt()
-        private const val NOTHING_FG_COLOR = 0xFFE6E8EC.toInt()
+        const val NOTHING_BUILTIN_PKG = "builtin.nothing.monochrome"
+        private const val NOTHING_BG_COLOR = 0xFF17181A.toInt()
+        private const val NOTHING_FG_COLOR = 0xFFF1F3F5.toInt()
         private const val PREFS_NAME = "iconcraft_base_pack_prefs"
         private const val KEY_BASE_PACK_PKG = "selected_base_pack_package"
 
         fun isNothingIconPack(packageName: String?): Boolean {
             if (packageName.isNullOrBlank()) return false
-            return packageName == NOTHING_ICON_PACK_PKG ||
+            return packageName == NOTHING_BUILTIN_PKG ||
+                packageName == NOTHING_ICON_PACK_PKG ||
                 packageName.startsWith("com.nothing.icon")
         }
     }
