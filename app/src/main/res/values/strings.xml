@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">IconCraft</string>
+    <string name="widget_label">IconCraft 1×1 Icon</string>
+    <string name="widget_description">Launch any customized app with zero shortcut watermark</string>
+</resources>

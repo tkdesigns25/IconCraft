@@ -1,0 +1,30 @@
+# Gradle & Build outputs
+.gradle/
+.kotlin/
+build/
+*/build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+!gradlew
+!gradlew.bat
+
+# Local configuration & IDE
+local.properties
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Keystores & Signing credentials
+keystore.properties
+*.jks
+*.keystore
+*.p12
+
+# APK binaries & generated template asset (built automatically by :app:syncTemplateApk)
+*.apk
+app/src/main/assets/template_iconpack.apk
+
+# Generated template icon slots 002..500 (generated automatically by :iconpack_template:ensure500TemplateSlots)
+iconpack_template/src/main/res/drawable-nodpi/custom_icon_*.png
+!iconpack_template/src/main/res/drawable-nodpi/custom_icon_001.png
